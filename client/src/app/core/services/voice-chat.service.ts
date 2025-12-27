@@ -28,17 +28,24 @@ export class VoiceChatService {
     try {
       const authToken = this.authService.getToken();
       if (!authToken) {
-        throw new Error('Not authenticated');
+        console.error('[Voice Chat] No auth token found');
+        throw new Error('Not authenticated. Please log in first.');
       }
 
-      console.log('[Voice Chat] Fetching token from:', `${this.apiUrl}/ai/speech/token`);
-      const response = await fetch(`${this.apiUrl}/ai/speech/token`, {
+      const url = `${this.apiUrl}/ai/speech/token`;
+      console.log('[Voice Chat] Fetching token from:', url);
+      console.log('[Voice Chat] Auth token present:', !!authToken);
+      
+      const response = await fetch(url, {
         method: 'GET',
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authToken}`,
         },
+      }).catch((fetchError) => {
+        console.error('[Voice Chat] Fetch error details:', fetchError);
+        throw new Error(`Network error: ${fetchError.message}. Make sure the backend server is running.`);
       });
 
       console.log('[Voice Chat] Token response status:', response.status);
@@ -54,6 +61,10 @@ export class VoiceChatService {
       return { token: data.token, region: data.region };
     } catch (error: any) {
       console.error('[Voice Chat] Token fetch error:', error);
+      // Provide more helpful error messages
+      if (error.message.includes('Network error') || error.message.includes('Failed to fetch')) {
+        throw new Error('Cannot connect to server. Please make sure the backend is running.');
+      }
       throw new Error(`Failed to get speech token: ${error.message}`);
     }
   }

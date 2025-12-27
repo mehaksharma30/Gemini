@@ -10,11 +10,13 @@ export interface ChatMessage {
 export interface PanicChatRequest {
   message: string;
   history: ChatMessage[];
+  conversationId?: string;
 }
 
 export interface PanicChatResponse {
   success: boolean;
   message: string;
+  conversationId?: string;
   reply?: string; // Legacy field for backward compatibility
 }
 
@@ -27,12 +29,67 @@ export class AIPanicService {
   constructor(private http: HttpClient) {}
 
   sendMessage(request: PanicChatRequest): Observable<PanicChatResponse> {
-    return this.http.post<PanicChatResponse>(`${this.apiUrl}/panic-chat`, request);
+    const endpoint = `${this.apiUrl}/panic-chat`;
+    const authToken = this.getAuthToken();
+    
+    // Detailed logging for debugging
+    console.log('[AIPanicService] Sending message:', {
+      endpoint,
+      payload: {
+        message: request.message?.substring(0, 50) + (request.message?.length > 50 ? '...' : ''),
+        historyLength: request.history?.length || 0,
+        conversationId: request.conversationId || 'none',
+      },
+      authTokenPresent: !!authToken,
+      authTokenLength: authToken?.length || 0,
+    });
+
+    return this.http.post<PanicChatResponse>(endpoint, request);
   }
 
   // Helper method for promise-based usage
   async sendMessageAsync(request: PanicChatRequest): Promise<PanicChatResponse> {
-    return firstValueFrom(this.sendMessage(request));
+    const endpoint = `${this.apiUrl}/panic-chat`;
+    const authToken = this.getAuthToken();
+    
+    // Detailed logging for debugging
+    console.log('[AIPanicService] Sending message (async):', {
+      endpoint,
+      payload: {
+        message: request.message?.substring(0, 50) + (request.message?.length > 50 ? '...' : ''),
+        historyLength: request.history?.length || 0,
+        conversationId: request.conversationId || 'none',
+      },
+      authTokenPresent: !!authToken,
+    });
+
+    try {
+      const response = await firstValueFrom(this.sendMessage(request));
+      console.log('[AIPanicService] Message sent successfully:', {
+        success: response.success,
+        messageLength: response.message?.length || 0,
+        conversationId: response.conversationId || 'none',
+      });
+      return response;
+    } catch (error: any) {
+      console.error('[AIPanicService] Message send failed:', {
+        status: error.status || 'unknown',
+        statusText: error.statusText || 'unknown',
+        error: error.error || error.message,
+        errorDetails: error.error ? JSON.stringify(error.error, null, 2) : 'none',
+        url: error.url || endpoint,
+      });
+      throw error;
+    }
+  }
+
+  private getAuthToken(): string | null {
+    // Try to get token from localStorage or sessionStorage
+    try {
+      return localStorage.getItem('token') || sessionStorage.getItem('token');
+    } catch {
+      return null;
+    }
   }
 }
 

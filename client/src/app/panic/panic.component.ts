@@ -1,11 +1,14 @@
 import { Component, inject, OnInit, ViewChild, ElementRef, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { HttpClient } from '@angular/common/http';
 import { EmergencyService, EmergencyContactUser } from '../core/services/emergency.service';
 import { PanicService } from '../core/services/panic.service';
 import { ToastService } from '../core/services/toast.service';
 import { AIPanicService, ChatMessage } from '../core/services/ai-panic.service';
 import { VoiceChatService } from '../core/services/voice-chat.service';
+import { SpeechToTextService } from '../core/services/speech-to-text.service';
+import { AuthService } from '../core/services/auth.service';
 
 @Component({
   selector: 'app-panic',
@@ -98,6 +101,15 @@ import { VoiceChatService } from '../core/services/voice-chat.service';
                   <span *ngIf="!isVoiceMode" class="mic-icon">🎤</span>
                   <span *ngIf="isVoiceMode" class="pulse recording-icon">🔴</span>
                 </button>
+                <button
+                  class="speaker-btn"
+                  (click)="playLatestAssistantMessage()"
+                  [disabled]="isAILoading || isSpeaking || !hasAssistantMessage()"
+                  title="Play latest AI response"
+                >
+                  <span *ngIf="!isSpeaking">🔊</span>
+                  <span *ngIf="isSpeaking" class="pulse">🔊</span>
+                </button>
                 <button class="close-chat-btn" (click)="closeAIChat()">×</button>
               </div>
             </div>
@@ -133,18 +145,31 @@ import { VoiceChatService } from '../core/services/voice-chat.service';
                 <span *ngIf="!isVoiceMode">🎤 Voice</span>
                 <span *ngIf="isVoiceMode" class="pulse">🔴 Recording...</span>
               </button>
+              <button
+                class="mic-btn"
+                [class.active]="isListening"
+                (click)="startSpeechToText()"
+                [disabled]="isAILoading || isListening || isVoiceMode"
+                title="Speak your message"
+              >
+                <span *ngIf="!isListening">🎤</span>
+                <span *ngIf="isListening" class="pulse">🔴</span>
+              </button>
+              <div class="listening-indicator" *ngIf="isListening">
+                <span>Listening...</span>
+              </div>
               <textarea
                 [(ngModel)]="chatInput"
                 placeholder="Type your message..."
                 rows="2"
                 class="chat-input"
                 (keydown.enter)="onChatEnter($event)"
-                [disabled]="isAILoading || isVoiceMode"
+                [disabled]="isAILoading || isVoiceMode || isListening"
               ></textarea>
               <button
                 class="send-chat-btn"
                 (click)="sendChatMessage()"
-                [disabled]="!chatInput.trim() || isAILoading || isVoiceMode"
+                [disabled]="!chatInput.trim() || isAILoading || isVoiceMode || isListening"
               >
                 <svg viewBox="0 0 24 24">
                   <path d="M2.01 21L23 12 2 10l15 2-15 2z"/>
@@ -423,6 +448,38 @@ import { VoiceChatService } from '../core/services/voice-chat.service';
       opacity: 0.5;
       cursor: not-allowed;
     }
+    .speaker-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 2px solid var(--teal-accent);
+      background: var(--button-gradient);
+      color: var(--light-gray);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s ease;
+      flex-shrink: 0;
+      font-size: 1.1rem;
+      box-shadow: 0 2px 8px rgba(118, 171, 174, 0.3);
+      margin-left: 0.5rem;
+    }
+    .speaker-btn:hover:not(:disabled) {
+      transform: scale(1.1);
+      box-shadow: 0 4px 12px rgba(118, 171, 174, 0.4);
+      background: var(--button-hover);
+    }
+    .speaker-btn.active,
+    .speaker-btn:active {
+      border-color: var(--tiger-orange);
+      background: rgba(255, 87, 34, 0.2);
+      box-shadow: 0 0 20px rgba(255, 87, 34, 0.6);
+    }
+    .speaker-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
     .mic-icon, .recording-icon {
       display: block;
       line-height: 1;
@@ -536,6 +593,7 @@ import { VoiceChatService } from '../core/services/voice-chat.service';
       border-top: 1px solid var(--border-color);
       background: var(--card-gradient);
       align-items: center;
+      position: relative;
     }
     .voice-record-btn {
       padding: 0.75rem 1.25rem;
@@ -623,6 +681,64 @@ import { VoiceChatService } from '../core/services/voice-chat.service';
       height: 20px;
       fill: currentColor;
     }
+    .mic-btn {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 2px solid var(--teal-accent);
+      background: var(--button-gradient);
+      color: var(--light-gray);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s ease;
+      flex-shrink: 0;
+      font-size: 1.2rem;
+      box-shadow: 0 2px 8px rgba(118, 171, 174, 0.3);
+    }
+    .mic-btn:hover:not(:disabled) {
+      transform: scale(1.1);
+      box-shadow: 0 4px 12px rgba(118, 171, 174, 0.4);
+      background: var(--button-hover);
+    }
+    .mic-btn.active {
+      border-color: var(--tiger-orange);
+      background: rgba(255, 87, 34, 0.2);
+      box-shadow: 0 0 20px rgba(255, 87, 34, 0.6);
+      animation: pulse-glow 2s infinite;
+    }
+    .mic-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .listening-indicator {
+      position: absolute;
+      top: -30px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--card-gradient);
+      border: 1px solid var(--border-color);
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      color: var(--text-primary);
+      white-space: nowrap;
+      z-index: 10;
+    }
+    .listening-indicator span {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .listening-indicator span::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--tiger-orange);
+      animation: pulse 1.5s infinite;
+    }
   `]
 })
 export class PanicComponent implements OnInit, OnDestroy {
@@ -633,6 +749,9 @@ export class PanicComponent implements OnInit, OnDestroy {
   private toastService = inject(ToastService);
   private aiPanicService = inject(AIPanicService);
   private voiceChatService = inject(VoiceChatService);
+  private speechToTextService = inject(SpeechToTextService);
+  private http = inject(HttpClient);
+  private authService = inject(AuthService);
 
   message = '';
   contacts: EmergencyContactUser[] = [];
@@ -644,6 +763,10 @@ export class PanicComponent implements OnInit, OnDestroy {
   chatInput = '';
   isAILoading = false;
   isVoiceMode = false;
+  conversationId: string | null = null;
+  isListening = false; // For STT listening state
+  isSpeaking = false; // For TTS playback state
+  private currentAudio: HTMLAudioElement | null = null; // Track current audio playback
 
   ngOnInit(): void {
     this.loadEmergencyContacts();
@@ -669,6 +792,7 @@ export class PanicComponent implements OnInit, OnDestroy {
     this.showAIChat = true;
     this.chatHistory = [];
     this.chatInput = '';
+    this.conversationId = null; // Reset conversationId for new conversation
     this.isTriggering = false;
 
     // Request initial AI message
@@ -678,12 +802,31 @@ export class PanicComponent implements OnInit, OnDestroy {
   requestInitialAIMessage(): void {
     this.isAILoading = true;
 
-    this.aiPanicService.sendMessage({
+    const payload = {
       message: 'Start',
       history: [],
-    }).subscribe({
+      conversationId: this.conversationId || undefined,
+    };
+
+    console.log('[Panic] Requesting initial AI message:', {
+      payload,
+      endpoint: 'http://localhost:3000/api/ai/panic-chat',
+    });
+
+    this.aiPanicService.sendMessage(payload).subscribe({
       next: (response) => {
         this.isAILoading = false;
+        console.log('[Panic] Initial message received:', {
+          success: response.success,
+          messageLength: response.message?.length || 0,
+          conversationId: response.conversationId || 'none',
+        });
+
+        // Store conversationId from response
+        if (response.conversationId) {
+          this.conversationId = response.conversationId;
+          console.log('[Panic] Received conversationId:', this.conversationId);
+        }
         // Use message field (new format) or reply field (legacy)
         const aiMessage = response.message || response.reply;
         if (response.success && aiMessage) {
@@ -698,8 +841,27 @@ export class PanicComponent implements OnInit, OnDestroy {
       },
       error: (err) => {
         this.isAILoading = false;
-        console.error('Error getting AI response:', err);
-        this.toastService.show(err.error?.message || 'Failed to connect to AI. Please try again.', 'error');
+        
+        // Detailed error logging
+        const errorDetails = {
+          status: err.status || 'unknown',
+          statusText: err.statusText || 'unknown',
+          error: err.error || err.message,
+          errorBody: err.error ? JSON.stringify(err.error, null, 2) : 'none',
+          url: err.url || 'http://localhost:3000/api/ai/panic-chat',
+        };
+        
+        console.error('[Panic] Initial message request failed:', errorDetails);
+        
+        // Check for auth errors
+        if (err.status === 401 || err.status === 403) {
+          this.toastService.show('Session expired. Please log in again.', 'error');
+        } else {
+          const errorMsg = process.env['NODE_ENV'] === 'development'
+            ? `Connection failed: ${err.status} ${err.statusText} - ${err.error?.error || err.message}`
+            : 'Failed to connect to AI. Please try again.';
+          this.toastService.show(errorMsg, 'error');
+        }
       },
     });
   }
@@ -721,28 +883,77 @@ export class PanicComponent implements OnInit, OnDestroy {
     // Send to AI
     this.isAILoading = true;
 
-    this.aiPanicService.sendMessage({
+    const payload = {
       message: userMessage,
       history: this.chatHistory.slice(0, -1), // Exclude the message we just added
-    }).subscribe({
+      conversationId: this.conversationId || undefined,
+    };
+
+    console.log('[Panic] Sending chat message:', {
+      message: userMessage.substring(0, 50) + (userMessage.length > 50 ? '...' : ''),
+      historyLength: payload.history.length,
+      conversationId: payload.conversationId || 'none',
+      endpoint: 'http://localhost:3000/api/ai/panic-chat',
+    });
+
+    this.aiPanicService.sendMessage(payload).subscribe({
       next: (response) => {
         this.isAILoading = false;
+        console.log('[Panic] Message sent successfully:', {
+          success: response.success,
+          messageLength: response.message?.length || 0,
+          conversationId: response.conversationId || 'none',
+        });
+
+        // Store conversationId from response
+        if (response.conversationId) {
+          this.conversationId = response.conversationId;
+          console.log('[Panic] Received conversationId:', this.conversationId);
+        }
         // Use message field (new format) or reply field (legacy)
         const aiMessage = response.message || response.reply;
         if (response.success && aiMessage) {
+          // Add AI response to chat history (display immediately)
           this.chatHistory.push({
             role: 'assistant',
             content: aiMessage,
           });
           setTimeout(() => this.scrollToBottom(), 100);
+
+          // Automatically play TTS audio using server-side Azure TTS
+          // This happens immediately after displaying the message
+          this.playTTSAudio(aiMessage).catch((error) => {
+            console.error('[Panic] Auto TTS failed:', error);
+            // Don't show error toast for auto TTS - it's optional, text is already displayed
+          });
         } else {
           this.toastService.show(aiMessage || 'Failed to get AI response', 'error');
         }
       },
       error: (err) => {
         this.isAILoading = false;
-        console.error('Error getting AI response:', err);
-        this.toastService.show(err.error?.message || 'Failed to send message. Please try again.', 'error');
+        
+        // Detailed error logging
+        const errorDetails = {
+          status: err.status || 'unknown',
+          statusText: err.statusText || 'unknown',
+          error: err.error || err.message,
+          errorBody: err.error ? JSON.stringify(err.error, null, 2) : 'none',
+          url: err.url || 'http://localhost:3000/api/ai/panic-chat',
+        };
+        
+        console.error('[Panic] Message send failed:', errorDetails);
+        
+        // Check for auth errors
+        if (err.status === 401 || err.status === 403) {
+          this.toastService.show('Session expired. Please log in again.', 'error');
+        } else {
+          // Show detailed error in dev mode
+          const errorMsg = process.env['NODE_ENV'] === 'development' 
+            ? `Send failed: ${err.status} ${err.statusText} - ${err.error?.error || err.message}`
+            : 'Failed to send message. Please try again.';
+          this.toastService.show(errorMsg, 'error');
+        }
       },
     });
   }
@@ -762,6 +973,7 @@ export class PanicComponent implements OnInit, OnDestroy {
     this.showAIChat = false;
     this.chatHistory = [];
     this.chatInput = '';
+    this.conversationId = null; // Reset conversationId when closing chat
   }
 
   toggleVoiceMode(): void {
@@ -806,10 +1018,475 @@ export class PanicComponent implements OnInit, OnDestroy {
     this.isVoiceMode = false;
   }
 
+  /**
+   * Start Speech-to-Text: Listen → Transcribe → Send to AI → Speak response
+   */
+  async startSpeechToText(): Promise<void> {
+    if (this.isListening || this.isAILoading || this.isVoiceMode) {
+      return;
+    }
+
+    try {
+      this.isListening = true;
+      console.log('[Panic] Starting STT...');
+
+      // Get last typed message for language detection
+      const lastUserMessage = this.chatHistory
+        .slice()
+        .reverse()
+        .find(msg => msg.role === 'user')?.content;
+
+      // Step 1: Transcribe speech to text (with language detection)
+      const transcribedText = await this.speechToTextService.transcribeOnce(lastUserMessage);
+      
+      console.log('[Panic] Transcribed text:', transcribedText);
+
+      if (!transcribedText || !transcribedText.trim()) {
+        this.toastService.show('No speech detected. Please try again.', 'error');
+        return;
+      }
+
+      // Step 2: Add user message to chat history
+      const userMessage = transcribedText.trim();
+      this.chatHistory.push({
+        role: 'user',
+        content: userMessage,
+      });
+      this.chatInput = ''; // Clear input
+      setTimeout(() => this.scrollToBottom(), 100);
+
+      // Step 3: Send to AI
+      this.isAILoading = true;
+      console.log('[Panic] Sending to AI...');
+
+      this.aiPanicService.sendMessage({
+        message: userMessage,
+        history: this.chatHistory.slice(0, -1), // Exclude the message we just added
+        conversationId: this.conversationId || undefined,
+      }).subscribe({
+        next: async (response) => {
+          this.isAILoading = false;
+          
+          // Store conversationId from response
+          if (response.conversationId) {
+            this.conversationId = response.conversationId;
+            console.log('[Panic] Received conversationId:', this.conversationId);
+          }
+
+          // Get AI response
+          const aiMessage = response.message || response.reply;
+          if (response.success && aiMessage) {
+            // Add AI response to chat history (display immediately)
+            this.chatHistory.push({
+              role: 'assistant',
+              content: aiMessage,
+            });
+            setTimeout(() => this.scrollToBottom(), 100);
+
+            // Step 4: Automatically play TTS audio (server-side Azure TTS)
+            this.playTTSAudio(aiMessage).catch((error) => {
+              console.error('[Panic] Auto TTS failed:', error);
+              // Don't show error toast for auto TTS - it's optional
+            });
+          } else {
+            this.toastService.show(aiMessage || 'Failed to get AI response', 'error');
+          }
+        },
+        error: (err) => {
+          this.isAILoading = false;
+          console.error('[Panic] AI error:', err);
+          this.toastService.show(
+            err.error?.message || 'Failed to send message. Please try again.',
+            'error'
+          );
+        },
+      });
+    } catch (error: any) {
+      console.error('[Panic] STT error:', error);
+      this.toastService.show(
+        error.message || 'Failed to transcribe speech. Please try typing instead.',
+        'error'
+      );
+    } finally {
+      this.isListening = false;
+    }
+  }
+
+  /**
+   * Play TTS audio for given text using server-side Azure TTS
+   * This is called automatically when AI responds
+   */
+  private async playTTSAudio(text: string): Promise<void> {
+    console.log('[Panic] 🎵 playTTSAudio() called with text:', text.substring(0, 50));
+    
+    if (this.isSpeaking) {
+      console.log('[Panic] Already speaking, skipping TTS');
+      return;
+    }
+
+    // Cleanup any existing audio first
+    this.cleanupAudio();
+
+    try {
+      this.isSpeaking = true;
+      console.log('[Panic] ===== STARTING SERVER-SIDE TTS =====');
+      console.log('[Panic] Text to speak:', text.substring(0, 100));
+
+      // Detect language from text
+      let lang = 'en';
+      const hindiPattern = /[\u0900-\u097F]/;
+      if (hindiPattern.test(text)) {
+        lang = 'hi';
+        console.log('[Panic] Detected Hindi text, using Hindi voice');
+      } else {
+        console.log('[Panic] Using English voice');
+      }
+
+      // Call TTS endpoint
+      const apiUrl = 'http://localhost:3000/api/ai/tts';
+      const authToken = this.authService.getToken();
+      
+      if (!authToken) {
+        console.error('[Panic] No auth token found');
+        throw new Error('Not authenticated');
+      }
+
+      console.log('[Panic] Calling TTS endpoint:', apiUrl);
+      console.log('[Panic] Request payload:', { text: text.substring(0, 50) + '...', lang });
+
+      // Fetch audio as blob
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ text, lang }),
+      });
+
+      console.log('[Panic] TTS response status:', response.status, response.statusText);
+      console.log('[Panic] TTS response headers:', {
+        contentType: response.headers.get('content-type'),
+        contentLength: response.headers.get('content-length'),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: response.statusText }));
+        console.error('[Panic] TTS endpoint error:', errorData);
+        throw new Error(errorData.error || `TTS failed: ${response.status}`);
+      }
+
+      // Get audio blob
+      const audioBlob = await response.blob();
+      console.log('[Panic] Received audio blob:', {
+        size: audioBlob.size,
+        type: audioBlob.type,
+        sizeInKB: (audioBlob.size / 1024).toFixed(2) + ' KB',
+      });
+
+      if (audioBlob.size === 0) {
+        throw new Error('Received empty audio blob from server');
+      }
+
+      // Check if blob type is correct
+      if (!audioBlob.type || (!audioBlob.type.includes('audio') && !audioBlob.type.includes('mpeg'))) {
+        console.warn('[Panic] Unexpected audio blob type:', audioBlob.type);
+        // Try to read first bytes to verify it's MP3
+        const firstBytes = await audioBlob.slice(0, 3).arrayBuffer();
+        const uint8Array = new Uint8Array(firstBytes);
+        const isMP3 = uint8Array[0] === 0xFF && (uint8Array[1] === 0xFB || uint8Array[1] === 0xF3);
+        console.log('[Panic] MP3 signature check:', isMP3, 'First bytes:', Array.from(uint8Array).map(b => '0x' + b.toString(16)).join(' '));
+        
+        if (!isMP3 && audioBlob.size < 100) {
+          // Might be an error response - read as text
+          const text = await audioBlob.text();
+          console.error('[Panic] Blob appears to be text, not audio:', text);
+          try {
+            const errorData = JSON.parse(text);
+            throw new Error(errorData.error || errorData.message || 'Server returned error instead of audio');
+          } catch {
+            throw new Error('Server returned invalid audio data');
+          }
+        }
+      }
+
+      // Create object URL and play
+      const audioUrl = URL.createObjectURL(audioBlob);
+      console.log('[Panic] Created audio URL:', audioUrl.substring(0, 50) + '...');
+      
+      // Store audio element to prevent garbage collection
+      this.currentAudio = new Audio(audioUrl);
+      console.log('[Panic] Created Audio element');
+
+      // Set volume to maximum
+      this.currentAudio.volume = 1.0;
+      console.log('[Panic] Set audio volume to 1.0');
+
+      // Set up event handlers BEFORE playing
+      this.currentAudio.onloadeddata = () => {
+        console.log('[Panic] Audio data loaded');
+      };
+
+      this.currentAudio.oncanplay = () => {
+        console.log('[Panic] Audio can play');
+      };
+
+      this.currentAudio.onplay = () => {
+        console.log('[Panic] ✅ Audio playback STARTED');
+      };
+
+      this.currentAudio.onended = () => {
+        console.log('[Panic] ✅ Audio playback ENDED');
+        URL.revokeObjectURL(audioUrl);
+        this.cleanupAudio();
+      };
+
+      this.currentAudio.onerror = (error) => {
+        console.error('[Panic] ❌ Audio playback ERROR:', error);
+        console.error('[Panic] Audio error details:', {
+          code: this.currentAudio?.error?.code,
+          message: this.currentAudio?.error?.message,
+        });
+        URL.revokeObjectURL(audioUrl);
+        this.cleanupAudio();
+      };
+
+      this.currentAudio.onpause = () => {
+        console.log('[Panic] Audio paused');
+      };
+
+      // Wait for audio to be ready
+      console.log('[Panic] Waiting for audio to be ready...');
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Audio load timeout'));
+        }, 10000); // 10 second timeout
+
+        this.currentAudio!.oncanplaythrough = () => {
+          clearTimeout(timeout);
+          console.log('[Panic] Audio ready to play');
+          resolve();
+        };
+
+        this.currentAudio!.onerror = (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        };
+
+        // If already can play, resolve immediately
+        if (this.currentAudio!.readyState >= 2) { // HAVE_CURRENT_DATA
+          clearTimeout(timeout);
+          console.log('[Panic] Audio already ready (readyState:', this.currentAudio!.readyState, ')');
+          resolve();
+        }
+      });
+
+      // Play audio (must be in user interaction context)
+      console.log('[Panic] Attempting to play audio...');
+      console.log('[Panic] Audio readyState:', this.currentAudio!.readyState);
+      console.log('[Panic] Audio paused:', this.currentAudio!.paused);
+      
+      try {
+        const playPromise = this.currentAudio!.play();
+        
+        if (playPromise !== undefined) {
+          await playPromise;
+          console.log('[Panic] ✅ audio.play() promise resolved - audio should be playing now');
+          console.log('[Panic] Audio paused after play:', this.currentAudio!.paused);
+          console.log('[Panic] Audio currentTime:', this.currentAudio!.currentTime);
+        } else {
+          console.log('[Panic] ✅ audio.play() called (no promise returned)');
+        }
+      } catch (playError: any) {
+        console.error('[Panic] ❌ audio.play() failed:', playError);
+        console.error('[Panic] Play error name:', playError.name);
+        console.error('[Panic] Play error message:', playError.message);
+        console.error('[Panic] Audio error code:', this.currentAudio?.error?.code);
+        console.error('[Panic] Audio error message:', this.currentAudio?.error?.message);
+        
+        // Handle autoplay policy error
+        if (playError.name === 'NotAllowedError' || playError.name === 'NotSupportedError') {
+          console.error('[Panic] Autoplay blocked by browser. User interaction required.');
+          // Don't throw - just log, user can click speaker button
+          console.warn('[Panic] Audio autoplay blocked. User can click speaker button to play.');
+          this.cleanupAudio();
+          return; // Exit silently - text is already displayed
+        }
+        
+        throw playError;
+      }
+    } catch (error: any) {
+      console.error('[Panic] ❌ TTS error:', error);
+      console.error('[Panic] Error stack:', error.stack);
+      this.cleanupAudio();
+      throw error; // Re-throw so caller can handle if needed
+    }
+  }
+
+  /**
+   * Check if there's an assistant message to play
+   */
+  hasAssistantMessage(): boolean {
+    return this.chatHistory.some(msg => msg.role === 'assistant');
+  }
+
+  /**
+   * Play the latest assistant message using server-side TTS
+   * (Called when user clicks the speaker button)
+   */
+  async playLatestAssistantMessage(): Promise<void> {
+    if (this.isSpeaking || this.isAILoading) {
+      return;
+    }
+
+    // Find the latest assistant message
+    const latestAssistantMessage = this.chatHistory
+      .slice()
+      .reverse()
+      .find(msg => msg.role === 'assistant');
+
+    if (!latestAssistantMessage || !latestAssistantMessage.content) {
+      this.toastService.show('No AI message to play', 'error');
+      return;
+    }
+
+    const text = latestAssistantMessage.content.trim();
+    if (!text) {
+      this.toastService.show('AI message is empty', 'error');
+      return;
+    }
+
+    try {
+      await this.playTTSAudio(text);
+    } catch (error: any) {
+      console.error('[Panic] TTS error:', error);
+      this.toastService.show(
+        error.message || 'Couldn\'t play audio. Check Azure Speech key/region.',
+        'error'
+      );
+    }
+  }
+
+  /**
+   * Old implementation - keeping for reference but using playTTSAudio instead
+   */
+  private async playLatestAssistantMessageOld(): Promise<void> {
+    if (this.isSpeaking || this.isAILoading) {
+      return;
+    }
+
+    // Find the latest assistant message
+    const latestAssistantMessage = this.chatHistory
+      .slice()
+      .reverse()
+      .find(msg => msg.role === 'assistant');
+
+    if (!latestAssistantMessage || !latestAssistantMessage.content) {
+      this.toastService.show('No AI message to play', 'error');
+      return;
+    }
+
+    const text = latestAssistantMessage.content.trim();
+    if (!text) {
+      this.toastService.show('AI message is empty', 'error');
+      return;
+    }
+
+    try {
+      this.isSpeaking = true;
+      console.log('[Panic] Playing TTS for text:', text.substring(0, 50) + '...');
+
+      // Detect language from text (simple detection)
+      let lang = 'en';
+      const hindiPattern = /[\u0900-\u097F]/;
+      if (hindiPattern.test(text)) {
+        lang = 'hi';
+        console.log('[Panic] Detected Hindi text');
+      }
+
+      // Call TTS endpoint
+      const apiUrl = 'http://localhost:3000/api/ai/tts';
+      const authToken = this.authService.getToken();
+      
+      if (!authToken) {
+        throw new Error('Not authenticated');
+      }
+
+      // Fetch audio as blob
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ text, lang }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: response.statusText }));
+        throw new Error(errorData.error || `TTS failed: ${response.status}`);
+      }
+
+      // Get audio blob
+      const audioBlob = await response.blob();
+      console.log('[Panic] Received audio blob, size:', audioBlob.size, 'type:', audioBlob.type);
+
+      // Create object URL and play
+      const audioUrl = URL.createObjectURL(audioBlob);
+      this.currentAudio = new Audio(audioUrl);
+
+      // Set up event handlers
+      this.currentAudio.onended = () => {
+        console.log('[Panic] Audio playback ended');
+        this.cleanupAudio();
+      };
+
+      this.currentAudio.onerror = (error) => {
+        console.error('[Panic] Audio playback error:', error);
+        this.toastService.show('Failed to play audio. Check browser audio settings.', 'error');
+        this.cleanupAudio();
+      };
+
+      // Play audio (must be in click handler context to avoid autoplay block)
+      console.log('[Panic] Starting audio playback...');
+      await this.currentAudio.play();
+      console.log('[Panic] Audio playback started');
+
+    } catch (error: any) {
+      console.error('[Panic] TTS error:', error);
+      this.toastService.show(
+        error.message || 'Couldn\'t play audio. Check Azure Speech key/region.',
+        'error'
+      );
+      this.isSpeaking = false;
+      this.cleanupAudio();
+    }
+  }
+
+  /**
+   * Cleanup audio resources
+   */
+  private cleanupAudio(): void {
+    console.log('[Panic] Cleaning up audio...');
+    if (this.currentAudio) {
+      try {
+        this.currentAudio.pause();
+        this.currentAudio.src = '';
+        this.currentAudio = null;
+        console.log('[Panic] Audio element cleaned up');
+      } catch (error) {
+        console.error('[Panic] Error cleaning up audio:', error);
+      }
+    }
+    this.isSpeaking = false;
+    console.log('[Panic] isSpeaking set to false');
+  }
+
   ngOnDestroy(): void {
     if (this.isVoiceMode) {
       this.stopVoiceChat();
     }
+    this.cleanupAudio();
   }
 
   scrollToBottom(): void {
