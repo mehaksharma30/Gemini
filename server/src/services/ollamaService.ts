@@ -3,9 +3,13 @@ import axios from 'axios';
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2:3b';
 
-console.log('Ollama Configuration:');
-console.log('  Base URL:', OLLAMA_BASE_URL);
-console.log('  Model:', OLLAMA_MODEL);
+// Only log Ollama configuration if explicitly using Ollama (AI_PROVIDER=ollama or USE_OLLAMA=true)
+const explicitOllama = process.env.AI_PROVIDER?.toLowerCase() === 'ollama' || process.env.USE_OLLAMA === 'true';
+if (explicitOllama) {
+  console.log('Ollama Configuration:');
+  console.log('  Base URL:', OLLAMA_BASE_URL);
+  console.log('  Model:', OLLAMA_MODEL);
+}
 
 const SYSTEM_PROMPT = `You are the MindMemos AI Companion, a supportive peer support assistant for a mental health journaling app.
 

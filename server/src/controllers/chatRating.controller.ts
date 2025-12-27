@@ -128,3 +128,44 @@ export const getRatingStatus = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message || 'Failed to fetch rating status' });
   }
 };
+
+export const deleteRating = async (req: Request, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const { conversationId } = req.params;
+
+    if (!conversationId || !mongoose.Types.ObjectId.isValid(conversationId)) {
+      return res.status(400).json({ success: false, message: 'Invalid conversation ID' });
+    }
+
+    const raterId = new mongoose.Types.ObjectId(req.user.userId);
+    const conversationObjectId = new mongoose.Types.ObjectId(conversationId);
+
+    const existingRating = await ChatRating.findOne({
+      conversationId: conversationObjectId,
+      raterId,
+    });
+
+    if (!existingRating) {
+      return res.status(404).json({ success: false, message: 'Rating not found' });
+    }
+
+    // If it was a helpful rating, we should consider removing XP, but for now we'll just delete the rating
+    // Note: XP removal is not implemented as it might have cascading effects
+    await ChatRating.deleteOne({ _id: existingRating._id });
+
+    return res.json({
+      success: true,
+      data: {
+        rating: null,
+      },
+      message: 'Rating removed successfully',
+    });
+  } catch (error: any) {
+    console.error('Delete rating error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Failed to delete rating' });
+  }
+};

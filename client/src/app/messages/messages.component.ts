@@ -6,13 +6,16 @@ import { DMService } from '../core/services/dm.service';
 import { ChatSocketService } from '../core/services/chat-socket.service';
 import { AuthService } from '../core/services/auth.service';
 import { ChatRatingService } from '../core/services/chat-rating.service';
+import { EmergencyService } from '../core/services/emergency.service';
+import { ToastService } from '../core/services/toast.service';
+import { EmergencyContactModalComponent } from './emergency-contact-modal.component';
 import { DirectMessage, ConversationListItem } from '../core/models/dm.model';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-messages',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, EmergencyContactModalComponent],
   template: `
     <div class="messages-container">
       
@@ -70,14 +73,22 @@ import { Subscription } from 'rxjs';
             <span class="rating-prompt">Was this person helpful?</span>
             <div class="rating-buttons">
               <button
+                *ngIf="currentRating !== 'helpful'"
                 class="rating-btn helpful"
-                [class.selected]="currentRating === 'helpful'"
                 [disabled]="currentRating !== null"
                 (click)="rateHelpful()"
               >
                 👍 Helpful
               </button>
               <button
+                *ngIf="currentRating === 'helpful'"
+                class="rating-btn helpful undo"
+                (click)="undoHelpful()"
+              >
+                👍 Helpful ✓
+              </button>
+              <button
+                *ngIf="currentRating !== 'helpful'"
                 class="rating-btn not-helpful"
                 [class.selected]="currentRating === 'not_helpful'"
                 [disabled]="currentRating !== null"
@@ -132,6 +143,13 @@ import { Subscription } from 'rxjs';
           </footer>
         </div>
       </main>
+
+      <app-emergency-contact-modal
+        [isOpen]="showEmergencyModal"
+        [username]="emergencyModalUsername"
+        (confirmed)="onEmergencyModalConfirmed($event)"
+        (closed)="showEmergencyModal = false"
+      />
     </div>
   `,
   styles: [`
@@ -385,6 +403,18 @@ import { Subscription } from 'rxjs';
       cursor: not-allowed;
     }
 
+    .rating-btn.undo {
+      background: rgba(132, 169, 140, 0.2);
+      border-color: var(--success-color);
+      color: var(--success-color);
+      cursor: pointer;
+    }
+
+    .rating-btn.undo:hover {
+      background: rgba(132, 169, 140, 0.3);
+      transform: translateY(-1px);
+    }
+
     .rating-feedback {
       font-size: 0.85rem;
       color: var(--success-color);
@@ -565,6 +595,8 @@ export class MessagesComponent implements OnInit, OnDestroy {
   private socketService = inject(ChatSocketService);
   private authService = inject(AuthService);
   private ratingService = inject(ChatRatingService);
+  private emergencyService = inject(EmergencyService);
+  private toastService = inject(ToastService);
 
   conversations: ConversationListItem[] = [];
   messages: DirectMessage[] = [];
@@ -574,6 +606,8 @@ export class MessagesComponent implements OnInit, OnDestroy {
   isSending = false;
   currentRating: 'helpful' | 'not_helpful' | null = null;
   ratingFeedback = '';
+  showEmergencyModal = false;
+  emergencyModalUsername = '';
 
   private messageSubscription?: Subscription;
 
@@ -763,6 +797,7 @@ export class MessagesComponent implements OnInit, OnDestroy {
   rateHelpful(): void {
     if (!this.selectedConversation || this.currentRating) return;
 
+    // Always perform the helpful action first
     this.ratingService.rateUser(
       this.selectedConversation.conversationId,
       this.selectedConversation.otherParticipant.id,
@@ -772,10 +807,62 @@ export class MessagesComponent implements OnInit, OnDestroy {
         this.currentRating = 'helpful';
         this.ratingFeedback = `Thanks! You helped ${this.selectedConversation!.otherParticipant.username} grow their MindMemos level 🌟`;
         setTimeout(() => this.ratingFeedback = '', 5000);
+
+        // Show modal AFTER helpful action succeeds
+        this.emergencyModalUsername = this.selectedConversation!.otherParticipant.username;
+        this.showEmergencyModal = true;
       },
       error: (err) => {
         console.error('Failed to submit rating:', err);
         this.ratingFeedback = 'Failed to submit rating';
+      },
+    });
+  }
+
+  onEmergencyModalConfirmed(confirmed: boolean): void {
+    this.showEmergencyModal = false;
+
+    if (confirmed && this.selectedConversation) {
+      this.addToEmergencyContacts(this.selectedConversation.otherParticipant.id);
+    }
+  }
+
+  undoHelpful(): void {
+    if (!this.selectedConversation || this.currentRating !== 'helpful') return;
+
+    this.ratingService.deleteRating(this.selectedConversation.conversationId).subscribe({
+      next: () => {
+        this.currentRating = null;
+        this.ratingFeedback = 'Helpful rating removed';
+        setTimeout(() => this.ratingFeedback = '', 3000);
+      },
+      error: (err) => {
+        console.error('Failed to remove rating:', err);
+        this.ratingFeedback = 'Failed to remove rating';
+      },
+    });
+  }
+
+  addToEmergencyContacts(contactUserId: string): void {
+    this.emergencyService.addEmergencyContact(contactUserId).subscribe({
+      next: (response) => {
+        if (response.success) {
+          this.toastService.show('Added to Emergency Contacts.', 'success');
+        } else {
+          this.toastService.show(response.message || 'Failed to add emergency contact', 'error');
+        }
+      },
+      error: (err) => {
+        console.error('Failed to add emergency contact:', err);
+        const errorMessage = err.error?.message || 'Failed to add emergency contact';
+        
+        if (errorMessage.includes('Maximum 3') || errorMessage.includes('limit')) {
+          this.toastService.show('You can only have 3 emergency contacts. Remove one to add another.', 'error');
+        } else if (errorMessage.includes('already')) {
+          this.toastService.show('This user is already in your emergency contacts.', 'error');
+        } else {
+          this.toastService.show(errorMessage, 'error');
+        }
       },
     });
   }

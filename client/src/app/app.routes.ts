@@ -68,6 +68,21 @@ export const routes: Routes = [
     canActivate: [authGuard],
   },
   {
+    path: 'emergency-contacts',
+    loadComponent: () => import('./emergency-contacts/emergency-contacts.component').then(m => m.EmergencyContactsComponent),
+    canActivate: [authGuard],
+  },
+  {
+    path: 'panic',
+    loadComponent: () => import('./panic/panic.component').then(m => m.PanicComponent),
+    canActivate: [authGuard],
+  },
+  {
+    path: 'alerts',
+    loadComponent: () => import('./alerts/alerts.component').then(m => m.AlertsComponent),
+    canActivate: [authGuard],
+  },
+  {
     path: '**',
     redirectTo: '/feed',
   },

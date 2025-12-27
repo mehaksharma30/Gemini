@@ -69,3 +69,21 @@
 6. **Styling (5 points)**
 
    * **5 points:** Responsive design across devices, enhanced with **Angular Animations** and **Motion One (motion.dev)** for smooth, accessible UI interactions.
+
+---
+
+# Environment Variables
+
+## Backend (.env)
+
+Required environment variables for the server:
+
+- `OPENAI_API_KEY` - Your OpenAI API key (required for AI chat feature)
+- `OPENAI_MODEL` - OpenAI model to use (default: "gpt-4o-mini")
+- `OPENAI_BASE_URL` - OpenAI API base URL (default: "https://api.openai.com/v1")
+- `EMAIL_PROVIDER` - Email provider: "gmail" or "ethereal" (default: "ethereal")
+- `EMAIL_FROM` - Email sender address (e.g., "MindMemos Alerts <mindmemos.alerts@gmail.com>")
+- `EMAIL_USER` - Gmail username (required if EMAIL_PROVIDER=gmail)
+- `EMAIL_PASS` - Gmail app password (required if EMAIL_PROVIDER=gmail)
+- `PORT` - Server port (default: 3000)
+- `FRONTEND_URL` - Frontend URL for CORS (default: "http://localhost:4200")

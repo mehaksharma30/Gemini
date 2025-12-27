@@ -4,10 +4,11 @@ import { CommonModule } from '@angular/common';
 import { filter } from 'rxjs/operators';
 import { AuthService } from './core/services/auth.service';
 import { NavbarComponent } from './layout/navbar/navbar.component';
+import { ToastComponent } from './core/components/toast/toast.component';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, CommonModule, NavbarComponent],
+  imports: [RouterOutlet, CommonModule, NavbarComponent, ToastComponent],
   templateUrl: './app.html',
   styleUrl: './app.css'
 })

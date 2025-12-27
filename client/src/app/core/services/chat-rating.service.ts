@@ -39,4 +39,8 @@ export class ChatRatingService {
       params: { conversationId, ratedUserId },
     });
   }
+
+  deleteRating(conversationId: string): Observable<RatingResponse> {
+    return this.http.delete<RatingResponse>(`${this.apiUrl}/${conversationId}`);
+  }
 }
