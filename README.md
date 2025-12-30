@@ -46,6 +46,41 @@
 - **OpenAI API** or **Ollama** for AI responses
 - **Azure Speech Services** for TTS
 
+## 📱 Quick Start: Testing on 2 Devices (ngrok)
+
+**For testing WebRTC voice calls between your computer and phone:**
+
+1. **Install dependencies** (first time only):
+   ```bash
+   cd server && npm install
+   cd ../client && npm install
+   ```
+
+2. **Start backend with ngrok** (in `server/` directory):
+   ```bash
+   cd server
+   npm run dev:ngrok
+   ```
+   This will:
+   - Start the backend server
+   - Start ngrok tunnel
+   - Print the public HTTPS URL (e.g., `https://xxxx.ngrok-free.app`)
+   - Automatically update frontend config to use the ngrok URL
+
+3. **Start frontend** (in a new terminal, `client/` directory):
+   ```bash
+   cd client
+   npm start
+   ```
+   Frontend will automatically use the ngrok URL for API calls.
+
+4. **On your phone/other device**:
+   - Open the ngrok URL shown in terminal (e.g., `https://xxxx.ngrok-free.app`)
+   - You may need to click through ngrok's warning page
+   - Log in and test voice calls!
+
+**Note**: The ngrok URL changes each time you restart (unless you set `NGROK_AUTH_TOKEN` in `server/.env` for stable URLs).
+
 ## 📋 Prerequisites
 
 - Node.js (v20+ recommended)
@@ -53,6 +88,7 @@
 - Azure Web PubSub Service (for voice calling)
 - Azure Speech Service (for voice chat features)
 - OpenAI API key (optional, can use Ollama instead)
+- ngrok (installed via npm, or install globally: `npm install -g ngrok`)
 
 ## 🔧 Installation
 
@@ -101,6 +137,9 @@ OLLAMA_MODEL=llama3.2:3b
 AZURE_WEB_PUBSUB_ENDPOINT=https://your-instance.webpubsub.azure.com
 AZURE_WEB_PUBSUB_ACCESS_KEY=your-access-key
 AZURE_WEB_PUBSUB_HUB_NAME=panic
+
+# Ngrok (optional, for stable URLs - get token from https://dashboard.ngrok.com/get-started/your-authtoken)
+NGROK_AUTH_TOKEN=your-ngrok-auth-token
 
 # Azure Speech Services (for voice chat)
 AZURE_SPEECH_KEY=your-azure-speech-key
@@ -165,8 +204,40 @@ export const environment = {
 
 ## 🧪 Testing Voice Calls
 
-### Setup
-1. Ensure both backend and frontend are running
+### Option 1: Testing on 2 Devices (Recommended for Real Testing)
+
+1. **Start backend with ngrok**:
+   ```bash
+   cd server
+   npm run dev:ngrok
+   ```
+   Copy the ngrok URL shown (e.g., `https://xxxx.ngrok-free.app`)
+
+2. **Start frontend** (in another terminal):
+   ```bash
+   cd client
+   npm start
+   ```
+
+3. **On your phone**:
+   - Open the ngrok URL in your phone's browser
+   - Log in with a test account
+   - Navigate to `/panic` page
+
+4. **On your computer**:
+   - Open `http://localhost:4200` in browser
+   - Log in with a different test account
+   - Navigate to `/panic` page
+   - Add phone user as emergency contact
+
+5. **Test the call**:
+   - Computer: Click "Test Web PubSub Connection" → Select contact → "Start Call"
+   - Phone: Should see incoming call modal → Click "Accept"
+   - Both should hear each other's audio!
+
+### Option 2: Testing Locally (2 Browser Windows)
+
+1. Ensure both backend and frontend are running (use `npm run dev` in server, `npm start` in client)
 2. Open two browser windows (or use incognito mode)
 3. Log in as different users in each window
 4. Add each other as emergency contacts (mark as "Helpful" in chat)

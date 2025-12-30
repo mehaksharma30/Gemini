@@ -25,9 +25,11 @@ export interface IncomingCall {
 @Injectable({
   providedIn: 'root',
 })
+import { environment } from '../../../environments/environment';
+
 export class PanicCallService {
   private http = inject(HttpClient);
-  private apiUrl = 'http://localhost:3000/api';
+  private apiUrl = environment.apiUrl;
   
   private client: WebPubSubClient | null = null;
   private userId: string = '';

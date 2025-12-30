@@ -51,6 +51,10 @@ client/uploads/
 *.env.*
 !.env.example
 
+# Ngrok URL files
+.ngrok-url
+**/.ngrok-url
+
 # Cache and build artifacts
 .cache/
 .parcel-cache/

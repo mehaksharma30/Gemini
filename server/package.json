@@ -5,6 +5,8 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "dev:ngrok": "ts-node-dev --respawn --transpile-only src/scripts/startWithNgrok.ts",
+    "ngrok:url": "ts-node-dev --transpile-only src/scripts/getNgrokUrl.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "seed:rooms": "ts-node-dev --transpile-only src/scripts/seedChatRooms.ts",
@@ -42,6 +44,7 @@
     "@types/jsonwebtoken": "^9.0.5",
     "@types/node": "^20.10.5",
     "@types/nodemailer": "^7.0.4",
+    "ngrok": "^5.1.0",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.3.3"
   }
