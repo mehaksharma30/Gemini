@@ -22,11 +22,11 @@ export interface IncomingCall {
   mode: 'single' | 'broadcast';
 }
 
+import { environment } from '../../../environments/environment';
+
 @Injectable({
   providedIn: 'root',
 })
-import { environment } from '../../../environments/environment';
-
 export class PanicCallService {
   private http = inject(HttpClient);
   private apiUrl = environment.apiUrl;

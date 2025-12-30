@@ -25,6 +25,16 @@
   "engines": {
     "node": ">=20.19.1"
   },
+  "browser": {
+    "url": false,
+    "assert": false,
+    "util": false,
+    "http": false,
+    "https": false,
+    "stream": false,
+    "buffer": false,
+    "crypto": false
+  },
   "dependencies": {
     "@angular/animations": "^20.3.0",
     "@angular/common": "^20.3.0",
