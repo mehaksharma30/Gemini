@@ -1,89 +1,300 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/tcXJhemk)
-# CSE330
+# MindMemos 2.0
 
-# Group Member
+**MindMemos** is a peer-support mental health journaling app. Users can write public journal entries about what they are experiencing (e.g., *panic attacks*), read others' posts, and learn coping tips from people who have been through similar situations. Topic-based chat rooms enable real-time conversations, while search helps users discover related posts and discussions. An upvote/token system highlights posts that have helped others. *(This app is for peer support and is not a substitute for professional care.)*
 
-* **Name:** Mehak Sharma
-* **Student ID:** 530436
+## 🚀 Features
+
+### Core Features
+- **User Authentication**: Secure JWT-based authentication with login/register
+- **Journal Posts**: Create, read, update, and delete public journal entries
+- **Comments**: Comment on posts to provide support and feedback
+- **Direct Messaging**: Real-time one-on-one messaging between users
+- **Search & Discovery**: Keyword/tag search to find related posts and discussions
+- **Upvotes & Tokens**: Upvote helpful posts and earn tokens for community contributions
+- **XP & Levels**: Gamification system with XP, levels, and badges (none, silver, gold, diamond)
+- **Emergency Contacts**: Add up to 3 emergency contacts for panic situations
+
+### AI Companion
+- **AI Chat Support**: Talk to an empathetic AI companion for immediate support
+- **Voice Chat**: Speech-to-text and text-to-speech for hands-free interaction
+- **Panic Mode**: Specialized AI support during panic attacks with tailored responses
+- **Conversation History**: Context-aware conversations that remember your journey
+
+### Real-Time Voice Calling ⭐ NEW
+- **2-Way Voice Calls**: Real-time audio communication between users using WebRTC
+- **Emergency Calling**: Call a specific emergency contact or broadcast to all contacts
+- **Incoming Call Handling**: Accept/decline incoming calls with visual notifications
+- **Mute/Unmute**: Control microphone during calls
+- **Web PubSub Signaling**: Secure signaling channel for call setup (audio uses WebRTC peer-to-peer)
+
+## 🛠️ Tech Stack
+
+### Frontend
+- **Angular 20** (TypeScript)
+- **Angular Animations** & **Motion One** for smooth UI interactions
+- **Azure Speech SDK** for voice chat (STT/TTS)
+- **WebRTC** for real-time audio communication
+- **Azure Web PubSub Client** for signaling
+
+### Backend
+- **Node.js** with **Express**
+- **TypeScript**
+- **MongoDB** with **Mongoose**
+- **Socket.IO** for real-time chat rooms
+- **Azure Web PubSub** for call signaling
+- **JWT** for authentication
+- **OpenAI API** or **Ollama** for AI responses
+- **Azure Speech Services** for TTS
+
+## 📋 Prerequisites
+
+- Node.js (v20+ recommended)
+- MongoDB (local or cloud instance)
+- Azure Web PubSub Service (for voice calling)
+- Azure Speech Service (for voice chat features)
+- OpenAI API key (optional, can use Ollama instead)
+
+## 🔧 Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd MindMemos2.0
+   ```
+
+2. **Install server dependencies**
+   ```bash
+   cd server
+   npm install
+   ```
+
+3. **Install client dependencies**
+   ```bash
+   cd ../client
+   npm install
+   ```
+
+## ⚙️ Environment Variables
+
+### Backend (`server/.env`)
+
+```env
+# Database
+MONGODB_URI=mongodb://localhost:27017/mindmemos
+
+# Server
+PORT=3000
+FRONTEND_URL=http://localhost:4200
+JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
+
+# AI Provider (choose one)
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_BASE_URL=https://api.openai.com/v1
+
+# OR use Ollama (local)
+AI_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.2:3b
+
+# Azure Web PubSub (for voice calling)
+AZURE_WEB_PUBSUB_ENDPOINT=https://your-instance.webpubsub.azure.com
+AZURE_WEB_PUBSUB_ACCESS_KEY=your-access-key
+AZURE_WEB_PUBSUB_HUB_NAME=panic
+
+# Azure Speech Services (for voice chat)
+AZURE_SPEECH_KEY=your-azure-speech-key
+AZURE_SPEECH_REGION=eastus
+
+# Email (optional, for alerts)
+EMAIL_PROVIDER=ethereal
+EMAIL_FROM=MindMemos Alerts <mindmemos.alerts@gmail.com>
+EMAIL_USER=your-gmail-username
+EMAIL_PASS=your-gmail-app-password
+```
+
+### Frontend (`client/src/environments/environment.ts`)
+
+```typescript
+export const environment = {
+  production: false,
+  apiUrl: 'http://localhost:3000/api',
+  azureSpeechKey: 'your-azure-speech-key',
+  azureSpeechRegion: 'eastus',
+};
+```
+
+## 🚀 Running the Application
+
+### Development Mode
+
+1. **Start MongoDB** (if running locally)
+   ```bash
+   mongod
+   ```
+
+2. **Start the backend server**
+   ```bash
+   cd server
+   npm run dev
+   ```
+   Server will run on `http://localhost:3000`
+
+3. **Start the Angular frontend**
+   ```bash
+   cd client
+   npm start
+   ```
+   Frontend will run on `http://localhost:4200`
+
+### Production Build
+
+1. **Build the backend**
+   ```bash
+   cd server
+   npm run build
+   npm start
+   ```
+
+2. **Build the frontend**
+   ```bash
+   cd client
+   npm run build
+   # Serve the dist/client folder with your preferred web server
+   ```
+
+## 🧪 Testing Voice Calls
+
+### Setup
+1. Ensure both backend and frontend are running
+2. Open two browser windows (or use incognito mode)
+3. Log in as different users in each window
+4. Add each other as emergency contacts (mark as "Helpful" in chat)
+
+### Test Single Call
+1. **Window 1 (Caller)**:
+   - Navigate to `/panic` page
+   - Click "Test Web PubSub Connection" (should show ✅ Connected)
+   - Select a contact from the dropdown
+   - Click "📞 Start Call"
+   - Status should show "📞 Calling..."
+
+2. **Window 2 (Callee)**:
+   - Navigate to `/panic` page
+   - Click "Test Web PubSub Connection"
+   - Should see incoming call modal: "**[Caller Name]** is calling you"
+   - Click "✅ Accept"
+
+3. **Both Windows**:
+   - Status should show "✅ Connected"
+   - Speak into microphone in Window 1 → Window 2 should hear it
+   - Speak into microphone in Window 2 → Window 1 should hear it
+   - Test mute/unmute buttons
+   - Click "❌ End Call" to disconnect
+
+### Test Broadcast Call
+1. **Window 1 (Caller)**:
+   - Click "📢 Alert All"
+   - All emergency contacts receive incoming call notification
+
+2. **Multiple Windows (Callees)**:
+   - First contact to accept connects
+   - Other contacts receive "Call cancelled" notification
+
+## 📁 Project Structure
+
+```
+MindMemos2.0/
+├── client/                 # Angular frontend
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── auth/       # Login/Register
+│   │   │   ├── posts/      # Journal posts (CRUD)
+│   │   │   ├── messages/   # Direct messaging
+│   │   │   ├── panic/      # Panic mode & voice calling
+│   │   │   ├── profile/    # User profiles
+│   │   │   └── core/       # Services, guards, interceptors
+│   │   └── environments/   # Environment configs
+│   └── package.json
+│
+├── server/                 # Node.js/Express backend
+│   ├── src/
+│   │   ├── controllers/   # Route handlers
+│   │   ├── models/        # MongoDB models
+│   │   ├── routes/        # API routes
+│   │   ├── services/      # Business logic
+│   │   ├── middleware/   # Auth middleware
+│   │   ├── socket/        # Socket.IO handlers
+│   │   └── config/        # Database, AI provider config
+│   └── package.json
+│
+└── README.md
+```
+
+## 🔐 Security Notes
+
+- **JWT Secrets**: Use strong, random secrets in production
+- **API Keys**: Never commit API keys to version control
+- **CORS**: Configure CORS properly for production domains
+- **HTTPS/WSS**: Always use secure connections in production
+- **Web PubSub Keys**: Keep access keys secure, never expose in frontend
+
+## 🐛 Troubleshooting
+
+### Voice Call Issues
+- **"Web PubSub not connected"**: Check backend `.env` has correct Azure Web PubSub credentials
+- **"InvalidStateError: remote description was null"**: Fixed in latest version - ICE candidates are now queued properly
+- **No audio**: Check browser microphone permissions and WebRTC connection state
+- **Call not connecting**: Verify both users are connected to Web PubSub and have added each other as emergency contacts
+
+### General Issues
+- **MongoDB connection error**: Ensure MongoDB is running and `MONGODB_URI` is correct
+- **AI not responding**: Check OpenAI API key or Ollama is running (depending on provider)
+- **CORS errors**: Verify `FRONTEND_URL` in backend `.env` matches your frontend URL
+
+## 📝 API Endpoints
+
+### Authentication
+- `POST /api/auth/register` - Register new user
+- `POST /api/auth/login` - Login user
+- `GET /api/auth/me` - Get current user
+
+### Posts
+- `GET /api/posts` - Get all posts
+- `POST /api/posts` - Create post
+- `GET /api/posts/:id` - Get post by ID
+- `PUT /api/posts/:id` - Update post
+- `DELETE /api/posts/:id` - Delete post
+- `POST /api/posts/:id/like` - Like post
+
+### Voice Calling
+- `GET /api/webpubsub/negotiate` - Get Web PubSub client access URL
+- `POST /api/webpubsub/token` - Generate Web PubSub token
+- `GET /api/webpubsub/health` - Health check
+
+### AI
+- `POST /api/ai/panic-chat` - Panic mode AI chat
+- `POST /api/ai/tts` - Text-to-speech
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📄 License
+
+This project is for educational purposes as part of CSE330 coursework.
+
+## ⚠️ Disclaimer
+
+**This app is for peer support and is not a substitute for professional mental health care.** If you are experiencing a mental health crisis, please contact:
+- National Suicide Prevention Lifeline: 988
+- Crisis Text Line: Text HOME to 741741
+- Your local emergency services: 911
 
 ---
 
-# Project Overview
-
-**MindMemos** is a peer‑support mental health journaling app. Users can write public journal entries about what they are experiencing (e.g., *panic attacks*), read others’ posts, and learn coping tips from people who have been through similar situations. Topic‑based chat rooms enable real‑time conversations, while search helps users discover related posts and discussions. An upvote/token system highlights posts that have helped others. *(This app is for peer support and is not a substitute for professional care.)*
-
----
-
-# Tech Stack
-
-* **Frontend:** Angular (TypeScript), Angular Animations, Motion One (motion.dev)
-* **Backend:** Node.js with Express
-* **Database:** MongoDB
-* **Real‑Time Communication:** Socket.IO (for chat rooms)
-* **Tooling (TBD as needed):** npm, Git/GitHub, testing & linting utilities
-
----
-
-# Grading Rubric (100 points)(approved by Cheng)
-
-1. **Rubric Submission (5 points)**
-
-   * **5 points:** Rubric created and uploaded to GitHub on time; verified by TA approval.
-
-2. **Frameworks and Technologies (30 points)**
-
-   * **Frontend Framework — Angular (10 points):** Implement and learn Angular to build an interactive, responsive user interface.
-   * **Backend Framework — Express with Node.js (10 points):** Configure Express to handle backend logic and API endpoints for the application.
-   * **Database — MongoDB (10 points):** Set up and utilize MongoDB for storing and managing application data.
-
-3. **Functionality (35 points)**
-
-   * **User Authentication (10 points)**
-
-     * **5 points:** Implement user login with proper form validation.
-     * **5 points:** Provide a reliable logout flow backed by session management.
-   * **Posting (CRUD & Visibility) (10 points)**
-
-     * **10 points:** Users can create, read, edit/update, and delete journal posts; posts are visible to all users.
-   * **Chat Room (5 points)**
-
-     * **5 points:** Real‑time, topic/condition‑based rooms where users can communicate and share coping strategies.
-   * **Search & Discovery (5 points)**
-
-     * **5 points:** Keyword/tag search to surface similar posts and link users to related content.
-   * **Community Impact — Upvotes/Tokens (5 points)**
-
-     * **5 points:** Upvote/acknowledge helpful posts; award non‑monetary tokens that reflect contributor experience/helpfulness.
-
-4. **Creative Portion (20 points)**
-
-   * **20 points:** Reserved for a unique feature or additional improvement added to the project (*TBD*).
-
-5. **Best Practices (5 points)**
-
-   * **Code Quality (5 points):**
-
-     * Code is well‑formatted, follows consistent style guidelines, and is easy to read.
-     * HTML output passes a validator with no major issues/errors.
-
-6. **Styling (5 points)**
-
-   * **5 points:** Responsive design across devices, enhanced with **Angular Animations** and **Motion One (motion.dev)** for smooth, accessible UI interactions.
-
----
-
-# Environment Variables
-
-## Backend (.env)
-
-Required environment variables for the server:
-
-- `OPENAI_API_KEY` - Your OpenAI API key (required for AI chat feature)
-- `OPENAI_MODEL` - OpenAI model to use (default: "gpt-4o-mini")
-- `OPENAI_BASE_URL` - OpenAI API base URL (default: "https://api.openai.com/v1")
-- `EMAIL_PROVIDER` - Email provider: "gmail" or "ethereal" (default: "ethereal")
-- `EMAIL_FROM` - Email sender address (e.g., "MindMemos Alerts <mindmemos.alerts@gmail.com>")
-- `EMAIL_USER` - Gmail username (required if EMAIL_PROVIDER=gmail)
-- `EMAIL_PASS` - Gmail app password (required if EMAIL_PROVIDER=gmail)
-- `PORT` - Server port (default: 3000)
-- `FRONTEND_URL` - Frontend URL for CORS (default: "http://localhost:4200")
+**Built with ❤️ for mental health support**
