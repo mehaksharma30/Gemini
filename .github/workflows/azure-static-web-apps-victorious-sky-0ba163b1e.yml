@@ -5,19 +5,50 @@ on:
     branches:
       - main
   pull_request:
-    types: [opened, synchronize, reopened, closed]
     branches:
       - main
 
 jobs:
+  # PRs: build only (no deploy)
+  pr_build_job:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Optional: If you want PR build validation, keep this.
+      # If you don't need PR build checks, you can remove this whole job.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Build
+        working-directory: client
+        run: npm run build
+
+  # main branch: deploy
   build_and_deploy_job:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
           lfs: false
+
+      - name: Check token presence
+        run: |
+          if [ -z "${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}" ]; then
+            echo "TOKEN MISSING: Please set repository secret AZURE_STATIC_WEB_APPS_API_TOKEN"
+            exit 1
+          else
+            echo "Token is present"
+          fi
 
       - name: Build and Deploy
         uses: Azure/static-web-apps-deploy@v1
@@ -29,6 +60,8 @@ jobs:
           api_location: ""
           output_location: "dist/client/browser"
 
+  # (Optional) PR close step - ONLY needed if you use SWA preview environments.
+  # If you're not using PR preview environments, you can delete this job safely.
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
