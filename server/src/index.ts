@@ -18,6 +18,7 @@ import searchRoutes from './routes/search.routes';
 import emergencyRoutes from './routes/emergency.routes';
 import panicRoutes from './routes/panic.routes';
 import alertsRoutes from './routes/alerts.routes';
+import webPubSubRoutes from './routes/webPubSub.routes';
 import { setupDMSocket } from './socket/dmSocket';
 import { setupVoiceChatSocket } from './socket/voiceChatSocket';
 import { initializeAzureSpeech } from './services/azureSpeech.service';
@@ -65,6 +66,7 @@ app.use('/api/search', searchRoutes);
 app.use('/api/emergency', emergencyRoutes);
 app.use('/api/panic', panicRoutes);
 app.use('/api/alerts', alertsRoutes);
+app.use('/api/webpubsub', webPubSubRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'MindMemos API is running' });

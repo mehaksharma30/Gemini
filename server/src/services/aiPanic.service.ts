@@ -34,163 +34,134 @@ interface UserStyleProfile {
   adviceTolerance: 'low' | 'medium' | 'high'; // Based on acceptance/rejection
   questionTolerance: 'low' | 'medium' | 'high'; // Based on engagement
   emotionalOpenness: 'low' | 'medium' | 'high'; // Based on sharing depth
-  detectedLanguage: 'english' | 'hindi' | 'hinglish' | 'mixed'; // User's language
+  detectedLanguage: 'english'; // User's language (English only)
   messageCount: number; // Track for gradual learning
 }
 
 const userStyleProfiles = new Map<string, UserStyleProfile>();
 
-const SYSTEM_PROMPT = `You are a warm, caring human friend inside a mental health app.
-You are ONE real person talking naturally, not a therapist, not a bot, not a scripted responder.
-You UNDERSTAND the user's message and respond meaningfully, not repeat or paraphrase their words.
+const SYSTEM_PROMPT = `You are ONE real, caring human friend.
+
+You are not a therapist.
+You are not a chatbot.
+You are not here to sound correct.
+You are here to make the user feel LESS ALONE and MORE SAFE.
+
+Always reply ONLY in English.
 
 ────────────────────────
-1) LANGUAGE MIRRORING (VERY IMPORTANT)
+HOW YOU TALK
 ────────────────────────
-- Detect the user's language and style automatically.
-- Respond in the SAME language or mix the user uses:
-  - English → English
-  - Hindi → Hindi
-  - Hinglish / mixed → Hinglish
-- Do NOT force formal language.
-- Match the user's casual tone, slang, and pacing.
-- Never explain language choice to the user.
-- If user writes in Hindi/Hinglish, respond naturally in that language.
+- Talk like a close friend who genuinely cares.
+- Warm, reassuring, calm.
+- No robotic lines.
+- No scripts.
+- No menus.
+- No commands.
+
+You don't rush.
+You don't lecture.
+You stay.
+
+CRITICAL ANTI-LOOP RULE:
+- Never repeat the same supportive line twice in a row.
+- If you already said "I'm here with you" or "I'm really glad you told me", switch to a different angle.
+- Vary your language naturally. Each reply must feel fresh, not templated.
+
+HARD BANNED PHRASES (use alternatives instead):
+- ❌ "I'm really glad you reached out" → ✅ "I'm here." / "Yeah, I'm listening."
+- ❌ "I want to understand what you're going through" → ✅ "Talk to me—what's spiking it right now?" / "What happened right before it started?"
+- ❌ "Can you tell me more?" → ✅ "What's going on?" / "What happened?" / "Talk to me."
 
 ────────────────────────
-2) HUMAN FRIEND BEHAVIOR
+HOW YOU LISTEN
 ────────────────────────
-- React first, then respond.
-- Sound instinctive, not polished.
-- Speak like a close friend sitting with the user.
-
-Human rules:
-- Sometimes short (1-2 sentences).
-- Sometimes 3–4 sentences.
-- Sometimes quiet (just presence).
-- No fixed templates.
-- Match the user's energy and depth naturally.
+- First, understand what the user is REALLY feeling.
+- Respond to the emotion, not just the words.
+- Do NOT repeat their exact sentence back.
+- Reflect meaning, not text.
 
 ────────────────────────
-3) EVENT-LEVEL MEMORY
+WHEN USER IS SAD / DEPRESSED
 ────────────────────────
-- Detect major emotional events (cheating, breakup, loss, self-harm).
-- React emotionally ONLY ONCE per event.
-- Store acknowledged events.
-- On repeats, do NOT re-react — move forward.
-- After event is acknowledged, switch to:
-  a) grounding / stabilizing
-  b) reflective clarification
-  c) practical guidance (if user asks)
-  d) emotional support without restating the event
-- When user asks "what should I do" about an already acknowledged event:
-  - Do NOT restate how painful it is.
-  - Respond with clarity, structure, gentle next steps.
-- Do not reuse metaphors or emotional descriptions for the same event across turns.
-- Style: Human, forward-moving, grounded. Like a friend who has already said "this sucks" and is now helping you stand back up.
+- Reassure presence.
+- Make them feel supported.
+- Invite them to share, gently.
 
-UNDERSTANDING OVER MIRRORING (CRITICAL):
-- You must NOT repeat or paraphrase the user's emotional words.
-- You must infer the meaning and respond in your own natural language.
-- Example:
-  User: "I'm so depressed and crying a lot"
-  ❌ "You're depressed and crying"
-  ✅ "Everything feels too heavy to hold right now."
-- Understand what they're really saying, then respond with your own words.
+Tone example:
+"I'm really glad you told me. I'm here, and we can take this one step at a time."
 
 ────────────────────────
-7) PERSONALIZATION (SOFT LEARNING)
+WHEN USER IS OVERWHELMED / CRYING
 ────────────────────────
-Maintain a hidden per-user profile:
-- preferred_response_length (adapt to user's message length)
-- advice_tolerance (adapt based on acceptance/rejection)
-- question_tolerance (adapt based on engagement)
-- emotional_openness (adapt based on sharing depth)
+- Presence first.
+- Few words.
+- Soft reassurance.
+- No fixing unless they ask.
 
-Update gradually based on:
-- message length
-- acceptance/rejection of advice
-- engagement level
-
-Do NOT say "I noticed…"
-Do NOT expose memory.
-Just adapt quietly.
-
-Use user-specific context (posts/chats/check-ins) silently:
-- Reflect relevant patterns or coping strategies *without calling it out as history*.
-- Reference history explicitly ONLY when user asks ("do you remember?").
-- If user has little/no history: still be warm, human, and helpful.
+Example:
+"I'm here. You don't have to be okay right now. I've got you."
 
 ────────────────────────
-4) ADVICE TIMING (BALANCED)
+PANIC ATTACK HANDLING (FRIEND STYLE - CRITICAL)
 ────────────────────────
-- Advice is NOT default.
-- Advice is allowed ONLY when:
-  a) user asks what to do
-  b) user feels stuck
-  c) user accepts help
-- One suggestion max.
-- If user refuses, stop advising.
-- Do NOT give advice in the first reply after distress is expressed.
-- At least one response of presence must come before any suggestion.
+When user says "panic attack" or "having a panic attack":
+- Respond in 2–4 sentences:
+  1) Confirm + reassure ("I'm here. Panic attacks are scary, but they pass.")
+  2) Ask ONE simple question about safety/body (e.g., "Are you somewhere you can sit?")
+  3) Offer ONE tiny grounding action ONLY if user seems stuck (not always)
+- Keep it calm, human, not robotic.
+- Don't dump long checklists.
+- Don't use generic phrases like "I want to understand what you're going through."
+
+Example response:
+"I'm here. Panic attacks are really scary, but they do pass. Are you somewhere you can sit down? If you want, try putting both feet flat on the floor and taking one slow breath."
 
 ────────────────────────
-5) CRYING / OVERWHELM MODE
+SELF-HARM / FEELING UNSAFE (VERY IMPORTANT)
 ────────────────────────
-- Prioritize presence.
-- No action suggestions unless asked.
-- 1–2 sentences max.
-- No questions unless user initiates.
-- Just be there, quietly.
+If the user says they want to hurt themselves or feel unsafe:
+
+You MUST:
+1) Show care and concern immediately.
+2) Reassure that you are here and they are not alone.
+3) Validate the PAIN, not the action.
+4) Gently slow things down.
+5) Ask at most ONE gentle safety question.
+6) Encourage safety and reaching out, without panic.
+
+NEVER say:
+- "That makes sense"
+- "I understand why you'd do that"
+- Cold one-liners
+
+Correct tone example:
+"Hey… I'm really glad you told me. I care about you, and I'm here with you right now. I can hear how much pain you're in, and we don't have to solve everything at once. Are you somewhere safe right now?"
+
+If danger becomes immediate or repeated, gently encourage contacting someone trusted or emergency help.
 
 ────────────────────────
-6) SELF-HARM RESPONSE STYLE
+ADVICE & SOLUTIONS
 ────────────────────────
-- Calm, protective, human.
-- No policy voice.
-- No emergency escalation on first mention.
-- Reassure presence and encourage talking.
-- Escalate only if intent repeats or becomes imminent.
-- Example tone:
-  "I hear how bad this feels. I'm here with you, and I don't want anything to happen to you.
-   Let's slow this moment down together. Talk to me — what's making it feel unbearable?"
+- Do NOT give advice by default.
+- Give advice ONLY if the user asks or feels stuck.
+- One small, gentle suggestion at a time.
+- Say things like:
+  "We'll figure this out together."
+  "We can look for a way forward, slowly."
 
 ────────────────────────
-8) NO REPETITION GUARDS
+STYLE RULES
 ────────────────────────
-- Never repeat:
-  greetings
-  reassurance phrases
-  emotional metaphors
-- If overlap >25% with previous assistant reply → rewrite shorter and simpler.
-- Each reply must add something new.
+- Sound human, not perfect.
+- Sometimes short.
+- Sometimes 2–4 sentences.
+- Never end abruptly.
+- Never feel cold or dismissive.
+- Never repeat the same supportive line twice in a row.
 
-────────────────────────
-9) STYLE CONSTRAINTS
-────────────────────────
-- Warm
-- Imperfect
-- Human
-- Like a real friend, not a guidebook
-- React first, then respond
-- Sound instinctive, not polished
-- Match user's energy and depth
-- No fixed templates
-- No therapy/policy voice
-- Simple language
-
-BREATHING/GROUNDING RULES:
-- Only mention breathing/grounding if:
-  a) The user explicitly asks for it, OR
-  b) The user reports acute panic symptoms (can't breathe, chest tightness, dizziness, hyperventilating)
-- Even then, keep it to ONE short line maximum.
-
-CRITICAL RULES - NEVER DO THESE:
-- NEVER use the phrase "your call" or "it's your call".
-- NEVER offer breathing/grounding as a default option in every message.
-- NEVER repeat the same sentence structure from your previous message.
-- NEVER use template phrases.
-- NEVER explain language choice to the user.
+You are a friend who says:
+"I'm here. You don't have to face this alone."
 
 Safety rules:
 - Do not diagnose or provide medical/clinical advice
@@ -252,6 +223,108 @@ function generatePersonalContextSummary(
   const finalSummary = summaryPoints.slice(0, 2).join('\n');
   
   return finalSummary;
+}
+
+/**
+ * Build history evidence pack from recent posts when user asks about history.
+ * Returns relevant posts matching keywords from user's question.
+ */
+function buildHistoryEvidencePack(
+  recentPosts: Array<{ title: string; content: string; tags: string[]; createdAt: Date }>,
+  userMessage: string
+): string {
+  if (!recentPosts || recentPosts.length === 0) {
+    return "No relevant journal notes found for that topic.";
+  }
+
+  // Extract keywords from user message
+  const lowerMessage = userMessage.toLowerCase();
+  const keywords: string[] = [];
+  
+  // Common emotional/event keywords
+  const keywordPatterns = [
+    /panic(?: attack)?/i,
+    /anxiety/i,
+    /depressed|depression/i,
+    /crying|cried/i,
+    /self-harm|hurt myself|suicide/i,
+    /breakup|broke up/i,
+    /cheat|cheated|cheating/i,
+    /death|died|loss|grief/i,
+    /anxious|anxiety/i,
+    /overwhelmed|overwhelm/i,
+    /sad|sadness/i,
+    /angry|anger/i,
+    /stressed|stress/i
+  ];
+  
+  keywordPatterns.forEach(pattern => {
+    const match = userMessage.match(pattern);
+    if (match) {
+      keywords.push(match[0].toLowerCase());
+    }
+  });
+
+  if (keywords.length === 0) {
+    // No specific keywords, return general message
+    return "No specific topic mentioned. I can see you have journal entries, but I'd need to know what you're looking for.";
+  }
+
+  // Score posts based on keyword matches and recency
+  const scoredPosts = recentPosts.map(post => {
+    let score = 0;
+    const lowerTitle = (post.title || '').toLowerCase();
+    const lowerContent = (post.content || '').toLowerCase();
+    const lowerTags = (post.tags || []).map(t => t.toLowerCase());
+    
+    // Keyword matches in title (higher weight)
+    keywords.forEach(keyword => {
+      if (lowerTitle.includes(keyword)) score += 3;
+      if (lowerContent.includes(keyword)) score += 2;
+      if (lowerTags.some(tag => tag.includes(keyword))) score += 2;
+    });
+    
+    // Recency boost (more recent = higher score)
+    const daysAgo = (Date.now() - new Date(post.createdAt).getTime()) / (1000 * 60 * 60 * 24);
+    const recencyBoost = Math.max(0, 5 - daysAgo); // Boost decreases over 5 days
+    score += recencyBoost;
+    
+    return { post, score };
+  });
+
+  // Sort by score and take top 3
+  const topPosts = scoredPosts
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map(item => item.post);
+
+  if (topPosts.length === 0) {
+    return "No relevant journal notes found for that topic.";
+  }
+
+  // Build evidence pack (max 6 lines total)
+  let evidencePack = "Relevant journal notes (for assistant use):\n";
+  
+  topPosts.forEach((post, idx) => {
+    if (idx >= 3) return; // Max 3 posts
+    
+    const date = new Date(post.createdAt).toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric',
+      year: new Date(post.createdAt).getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined
+    });
+    
+    const title = post.title || 'Untitled';
+    const contentSnippet = (post.content || '').substring(0, 140).trim();
+    const snippet = contentSnippet.length < (post.content || '').length 
+      ? contentSnippet + '...' 
+      : contentSnippet;
+    
+    evidencePack += `- ${date}: "${title}" - ${snippet}\n`;
+  });
+
+  return evidencePack.trim();
 }
 
 /**
@@ -374,34 +447,32 @@ function detectMajorEmotionalDisclosure(userMessage: string): boolean {
 }
 
 /**
- * Detect user's language (English, Hindi, Hinglish).
+ * Detect user's language (always English).
  */
-function detectUserLanguage(userMessage: string): 'english' | 'hindi' | 'hinglish' | 'mixed' {
+function detectUserLanguage(userMessage: string): 'english' {
+  // Always return English - Hindi/Hinglish support removed
+  return 'english';
+}
+
+/**
+ * Detect if user is having a panic attack
+ */
+function detectPanicAttack(userMessage: string): boolean {
   if (!userMessage || typeof userMessage !== 'string') {
-    return 'english';
+    return false;
   }
 
-  // Hindi characters (Devanagari script)
-  const hindiPattern = /[\u0900-\u097F]/;
-  // Common Hindi words in English script
-  const hinglishWords = ['hai', 'ho', 'hain', 'ka', 'ki', 'ko', 'se', 'mein', 'par', 'aur', 'ya', 'nahi', 'nahi', 'kya', 'kyun', 'kaise', 'kab', 'kahan', 'kisne', 'kisko', 'kiski'];
-  
-  const hasHindiScript = hindiPattern.test(userMessage);
   const lowerMessage = userMessage.toLowerCase();
-  const hasHinglishWords = hinglishWords.some(word => lowerMessage.includes(word));
+  const panicIndicators = [
+    'panic attack',
+    'having a panic attack',
+    'having panic',
+    'panic right now',
+    'panicking',
+    'full panic'
+  ];
   
-  if (hasHindiScript) {
-    // Check if mixed with English
-    const englishWords = lowerMessage.match(/\b[a-z]+\b/g) || [];
-    if (englishWords.length > 0) {
-      return 'hinglish';
-    }
-    return 'hindi';
-  } else if (hasHinglishWords) {
-    return 'hinglish';
-  }
-  
-  return 'english';
+  return panicIndicators.some(indicator => lowerMessage.includes(indicator));
 }
 
 /**
@@ -794,7 +865,7 @@ function removeAdviceFromResponse(response: string): string {
       "I hear you.",
       "That sounds really hard.",
       "I'm staying with you.",
-      "Tell me what's happening."
+      "Yeah—I'm here. Take your time. What's going on?"
     ];
     const hash = response.length % presenceResponses.length;
     cleaned = presenceResponses[hash];
@@ -838,11 +909,11 @@ function detectCrisisLanguage(message: string): boolean {
 function generateCrisisResponse(): string {
   // Calm, protective, hopeful crisis responses
   const crisisResponses = [
-    "I hear how bad this feels. I'm here with you, and I don't want anything to happen to you. Let's slow this moment down together. Talk to me — what's making it feel unbearable?",
-    "I'm here with you. This moment can pass. I care about you, and I want to help you get through this. What's going on right now?",
-    "I hear you. I'm staying with you, and I don't want anything bad to happen. Let's talk through what's making this feel so impossible right now.",
-    "I'm here. This feeling can pass. I care about you, and we can get through this together. Tell me what's happening.",
-    "I hear how unbearable this feels. I'm here with you, and I want to help you stay safe. Let's slow down and talk — what's making it feel so heavy?"
+    "Hey… I'm really glad you told me. I care about you, and I'm here with you right now. I can hear how much pain you're in, and we don't have to solve everything at once. Are you somewhere safe right now?",
+    "I'm really glad you told me. I'm here with you. You're not alone right now. I can hear how much this is hurting you. Are you somewhere safe?",
+    "I'm really glad you said that out loud. I'm here with you, and I care about you. This pain you're feeling—we can work through it together. Are you somewhere safe right now?",
+    "Thank you for telling me. I'm here with you, and you don't have to face this alone. I can hear how much you're hurting. Are you somewhere safe?",
+    "I'm really glad you told me. I'm here with you right now, and I care about you. We don't have to figure everything out at once. Are you somewhere safe?"
   ];
 
   // Use a simple hash based on timestamp to vary responses
@@ -863,7 +934,44 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
   let cleaned = response;
   const lowerResponse = response.toLowerCase();
   
-  // CRYING/OVERWHELM MODE: Enforce 1-2 sentences, no questions, no advice
+  // ANTI-LOOP CHECK: Detect if response contains banned template phrases
+  const bannedTemplatePhrases = [
+    "I'm really glad you reached out. I'm here, and I want to understand what you're going through. Can you tell me more?",
+    "I'm really glad you reached out",
+    "I want to understand what you're going through",
+    "Can you tell me more?"
+  ];
+
+  const responseContainsBannedPhrase = bannedTemplatePhrases.some(phrase => 
+    cleaned.toLowerCase().includes(phrase.toLowerCase())
+  );
+
+  // Check if previous assistant message also had similar template
+  const prevAssistantForLoopCheck = history
+    .slice()
+    .reverse()
+    .find(msg => msg.role === 'assistant');
+
+  if (responseContainsBannedPhrase && prevAssistantForLoopCheck) {
+    const prevContainsBanned = bannedTemplatePhrases.some(phrase =>
+      prevAssistantForLoopCheck.content.toLowerCase().includes(phrase.toLowerCase())
+    );
+    
+    if (prevContainsBanned) {
+      // Template loop detected - replace with varied response
+      console.log('[AI] Template loop detected - replacing with varied response');
+      const variedResponses = [
+        "I'm here. What's going on?",
+        "Talk to me—what's spiking it right now?",
+        "I'm staying with you. What happened?",
+        "I'm here with you. What happened right before it started?"
+      ];
+      const hash = cleaned.length % variedResponses.length;
+      cleaned = variedResponses[hash];
+    }
+  }
+  
+  // CRYING/OVERWHELM MODE: Enforce 1-2 sentences, no questions, no advice, BUT keep warmth
   if (isCryingOrOverwhelmed) {
     // Remove questions
     if (responseContainsQuestion(cleaned)) {
@@ -875,25 +983,24 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
       cleaned = removeAdviceFromResponse(cleaned);
     }
     
-    // Enforce 1-2 sentences max
+    // Enforce 1-2 sentences max, but ensure warmth is preserved
     const sentences = cleaned.split(/[.!?]+/).filter(s => s.trim().length > 0);
     if (sentences.length > 2) {
       cleaned = sentences.slice(0, 2).join('. ').trim() + '.';
     }
     
-    // If too long, use presence-only response
+    // If too long, use warm presence response (not just "I'm here")
     if (cleaned.split(/\s+/).length > 20) {
-      const presenceResponses = [
-        "I'm here with you.",
-        "I'm staying with you.",
-        "Take your time.",
-        "I'm here."
+      const warmPresenceResponses = [
+        "I'm here with you. You don't have to be okay right now.",
+        "I'm staying with you. It's okay to let it out.",
+        "I'm here. You don't have to be strong right now. I've got you."
       ];
-      const hash = cleaned.length % presenceResponses.length;
-      cleaned = presenceResponses[hash];
+      const hash = cleaned.length % warmPresenceResponses.length;
+      cleaned = warmPresenceResponses[hash];
     }
     
-    console.log('[AI] Crying/overwhelm mode - enforced presence-only response');
+    console.log('[AI] Crying/overwhelm mode - enforced warm presence response (1-2 sentences)');
   }
   
   // EVENT-LEVEL MEMORY GUARD: Check if event was already acknowledged
@@ -968,7 +1075,7 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
     
     // Track if user accepted advice (check previous assistant message for advice)
     const lastHadAdvice = lastMessageHadAdvice.get(conversationId) || false;
-    const userEngagedWithQuestion = userMessage && userMessage.length > 10; // Simple engagement check
+    const userEngagedWithQuestion = !!(userMessage && userMessage.length > 10); // Simple engagement check (explicit boolean)
     
     if (userId && lastHadAdvice && !refusedAdvice && userMessage && userMessage.length > 5) {
       // User didn't refuse advice and responded - might have accepted
@@ -1026,35 +1133,22 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
     }
   }
 
-  // Step 1: Remove banned phrases and helping language
+  // Step 1: Remove ONLY truly problematic phrases (not caring language)
+  // Keep caring phrases like "I'm here with you", "I'm really glad you told me", etc.
   const bannedPhrases = [
     /your call/gi,
     /it's your call/gi,
     /we can just talk,? or we can try (breathing|grounding)/gi,
     /we can talk,? or we can do something to calm/gi,
-    /grounding or breathing thing/gi,
-    /we can just talk/gi,
-    /i want to help you/gi,
-    /let me help you/gi,
-    /we can do this together/gi,
-    /i want to help you stay safe/gi
+    /grounding or breathing thing/gi
+    // Removed: "we can just talk", "i want to help you", "let me help you", etc. - these are caring
   ];
 
   for (const pattern of bannedPhrases) {
     cleaned = cleaned.replace(pattern, '');
   }
   
-  // Remove reassurance phrases (regex patterns)
-  const reassurancePatterns = [
-    /i'm really glad you told me/gi,
-    /i'm really glad you reached out/gi,
-    /that sounds heavy/gi,
-    /i'm sorry you're feeling/gi
-  ];
-  
-  for (const pattern of reassurancePatterns) {
-    cleaned = cleaned.replace(pattern, '');
-  }
+  // REMOVED: reassurancePatterns removal - we want to keep caring reassurance phrases
   
   // Step 1b: Remove explicit history references (unless user asked)
   const explicitHistoryPhrases = [
@@ -1067,38 +1161,60 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
     /your check-ins/i
   ];
   
-  // Check if user asked about history
+  // Check if user asked about history (strengthened detection)
   const userAskedAboutHistory = userMessage && (
     userMessage.toLowerCase().includes('remember') ||
     userMessage.toLowerCase().includes('do you know') ||
-    userMessage.toLowerCase().includes('have i told you')
+    userMessage.toLowerCase().includes('have i told you') ||
+    userMessage.toLowerCase().includes('did i mention') ||
+    userMessage.toLowerCase().includes('did i write') ||
+    userMessage.toLowerCase().includes('post') ||
+    userMessage.toLowerCase().includes('posted') ||
+    userMessage.toLowerCase().includes('journal') ||
+    userMessage.toLowerCase().includes('record') ||
+    userMessage.toLowerCase().includes('check') ||
+    userMessage.toLowerCase().includes('lately') ||
+    userMessage.toLowerCase().includes('recently') ||
+    userMessage.toLowerCase().includes('last time') ||
+    userMessage.toLowerCase().includes('before') ||
+    userMessage.toLowerCase().includes('earlier') ||
+    userMessage.toLowerCase().includes('see if') ||
+    userMessage.toLowerCase().includes('see whether') ||
+    /did i (post|write|mention|say)/i.test(userMessage) ||
+    /what did i (post|write|say)/i.test(userMessage) ||
+    /(see|check|look).*(post|journal|record)/i.test(userMessage)
   );
   
-  // Only remove explicit references if user didn't ask AND it hasn't been used yet
-  if (conversationId && !userAskedAboutHistory) {
-    const hasUsedExplicitRef = explicitHistoryReferenceUsed.get(conversationId) || false;
-    
-    if (!hasUsedExplicitRef) {
-      // First time - allow it but mark as used
-      const hasExplicitRef = explicitHistoryPhrases.some(pattern => pattern.test(cleaned));
-      if (hasExplicitRef) {
-        explicitHistoryReferenceUsed.set(conversationId, true);
-        console.log('[AI] Explicit history reference detected and marked as used');
+  // Only remove explicit references if user didn't ask
+  if (!userAskedAboutHistory) {
+    if (conversationId) {
+      const hasUsedExplicitRef = explicitHistoryReferenceUsed.get(conversationId) || false;
+      
+      if (!hasUsedExplicitRef) {
+        // First time - allow it but mark as used
+        const hasExplicitRef = explicitHistoryPhrases.some(pattern => pattern.test(cleaned));
+        if (hasExplicitRef) {
+          explicitHistoryReferenceUsed.set(conversationId, true);
+          console.log('[AI] Explicit history reference detected and marked as used');
+        }
+      } else {
+        // Already used - remove any explicit references
+        for (const pattern of explicitHistoryPhrases) {
+          cleaned = cleaned.replace(pattern, '');
+        }
+        // Clean up resulting double spaces
+        cleaned = cleaned.replace(/\s+/g, ' ').trim();
       }
     } else {
-      // Already used - remove any explicit references
+      // No conversationId - remove all explicit references
       for (const pattern of explicitHistoryPhrases) {
         cleaned = cleaned.replace(pattern, '');
       }
-      // Clean up resulting double spaces
       cleaned = cleaned.replace(/\s+/g, ' ').trim();
     }
-  } else if (!userAskedAboutHistory) {
-    // No conversationId - remove all explicit references
-    for (const pattern of explicitHistoryPhrases) {
-      cleaned = cleaned.replace(pattern, '');
-    }
-    cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  } else {
+    // User asked about history - DO NOT remove explicit references
+    console.log('[AI] User asked about history - allowing explicit references');
   }
   
   // Clean up extra spaces
@@ -1109,6 +1225,7 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
     .filter(msg => msg.role === 'assistant')
     .map(msg => msg.content.toLowerCase());
   
+  // Get previous assistant message (used for multiple checks)
   const previousAssistantMsg = history
     .slice()
     .reverse()
@@ -1186,29 +1303,12 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
     }
   }
   
-  // Step 3b: HARD BANNED REPETITIONS - Check if any banned phrase was used before
-  const hardBannedPhrases = [
-    "hey. i'm here with you",
-    "i'm here with you",
-    "i'm really glad you told me",
-    "you're not alone right now",
-    "i want to help you stay safe"
-  ];
-
-  // lowerCleaned already declared above (line 1142)
-  let hasBannedRepetition = false;
-  let bannedPhraseFound = '';
-
-  for (const bannedPhrase of hardBannedPhrases) {
-    // Check if current response contains this banned phrase
-    if (lowerCleaned.includes(bannedPhrase)) {
-      // Check if it was used in any previous assistant message
-      const wasUsedBefore = allAssistantMessages.some(msg => msg.includes(bannedPhrase));
-      if (wasUsedBefore) {
-        hasBannedRepetition = true;
-        bannedPhraseFound = bannedPhrase;
-        break;
-      }
+  // Step 3b: EXACT-SAME-SENTENCE REPETITION ONLY - Check if current message is near-duplicate of previous
+  let isNearDuplicateMessage = false;
+  if (previousAssistantMsg) {
+    isNearDuplicateMessage = isNearDuplicate(previousAssistantMsg.content, cleaned);
+    if (isNearDuplicateMessage) {
+      console.log('[AI] Near-duplicate detected - will rephrase instead of deleting warmth');
     }
   }
 
@@ -1312,35 +1412,43 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
     }
   }
 
-  // Step 7: If >25% overlap, emotional mirroring, banned repetition, or repeated suggestion detected, rewrite response
-  if (overlapPercentage > 25 || hasBannedRepetition || hasRepeatedReassurance || hasEmotionalMirroring || hasRepeatedSuggestion) {
-    // Remove the banned phrase if found
-    if (hasBannedRepetition && bannedPhraseFound) {
-      const regex = new RegExp(bannedPhraseFound.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-      cleaned = cleaned.replace(regex, '').replace(/\s+/g, ' ').trim();
+  // Step 7: If near-duplicate, high overlap, emotional mirroring, or repeated suggestion detected, rewrite response
+  // Note: We removed hasBannedRepetition and hasRepeatedReassurance checks - we want to keep caring phrases
+  if (isNearDuplicateMessage || overlapPercentage > 25 || hasEmotionalMirroring || hasRepeatedSuggestion) {
+    // If near-duplicate, rephrase with alternate wording (don't delete to emptiness)
+    if (isNearDuplicateMessage) {
+      // Rephrase with similar meaning but different words
+      const alternatePhrasings = [
+        "I'm here with you. What's going on?",
+        "I'm really glad you told me. I'm here, and we can take this one step at a time.",
+        "I hear you. I'm staying with you right now.",
+        "I'm here. You don't have to face this alone."
+      ];
+      const hash = cleaned.length % alternatePhrasings.length;
+      cleaned = alternatePhrasings[hash];
+      console.log('[AI] Rephrased near-duplicate message with alternate wording');
     }
-
     // If >25% overlap or repeated suggestion, rewrite shorter with different wording
-    if (overlapPercentage > 25 || hasRepeatedSuggestion) {
+    else if (overlapPercentage > 25 || hasRepeatedSuggestion) {
       // Rewrite to be shorter (2-3 sentences max) with different wording
       const sentences = cleaned.split(/[.!?]+/).filter(s => s.trim().length > 0);
       if (sentences.length > 0) {
         // Take first 2 sentences max, ensure they're different
         const shortened = sentences.slice(0, 2).join('. ').trim() + '.';
-        // If still too similar, use a completely different response
+        // If still too similar, use a warm, varied response (not empty validation)
         if (shortened.length > 0 && shortened.length < cleaned.length * 0.7) {
           cleaned = shortened;
         } else {
-          // Use a short, varied response
-          const shortResponses = [
-            "I hear you.",
-            "That sounds really hard.",
-            "I'm here with you.",
-            "Tell me what's happening.",
-            "What's going on?"
+          // Use a warm, varied response (not empty validation)
+          const warmResponses = [
+            "I'm here with you. That sounds really hard.",
+            "I'm really glad you told me. I'm here, and we can take this one step at a time.",
+            "I'm here. You don't have to face this alone. What's going on?",
+            "I'm staying with you. Talk to me—what happened?",
+            "I'm here with you. What's spiking it right now?"
           ];
-          const hash = cleaned.length % shortResponses.length;
-          cleaned = shortResponses[hash];
+          const hash = cleaned.length % warmResponses.length;
+          cleaned = warmResponses[hash];
         }
       }
     } else if (hasEmotionalMirroring) {
@@ -1351,26 +1459,26 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
         "I can hear how much this is weighing on you.",
         "It sounds like you're holding a lot right now.",
         "This must feel overwhelming.",
-        "I hear how difficult this is for you.",
+        "I'm really glad you told me. I'm here with you.",
         "That sounds like it's really weighing you down."
       ];
       
       const hash = cleaned.length % understandingResponses.length;
       cleaned = understandingResponses[hash];
     } else {
-      // Generate natural, varied responses
-      const naturalResponses = [
-        "That sounds really hard.",
-        "I'm here with you.",
-        "Tell me more about that.",
-        "I hear you.",
-        "What's going on?",
-        "That makes sense.",
-        "I understand."
+      // Generate warm, varied responses (not empty validation)
+      const warmResponses = [
+        "I'm here with you. That sounds really hard.",
+        "I'm really glad you told me. I'm here, and we can take this one step at a time.",
+        "I'm here. You don't have to face this alone. What happened?",
+        "I'm staying with you. Talk to me—what happened?",
+        "I'm here with you. What's been weighing on you?",
+        "I'm really glad you reached out. I'm here, and we can work through this together.",
+        "I'm here. That sounds really difficult. What happened right before it started?"
       ];
 
-      // If cleaned response is still meaningful after removing banned phrase, keep it but ensure it's natural
-      if (cleaned.length > 10 && !hasBannedRepetition && !hasRepeatedReassurance) {
+      // If cleaned response is still meaningful, keep it but ensure it's natural
+      if (cleaned.length > 10) {
         // Keep it but ensure it doesn't repeat structure (2-3 sentences max)
         const sentences = cleaned.split(/[.!?]+/).filter(s => s.trim().length > 0);
         if (sentences.length > 0) {
@@ -1384,56 +1492,122 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
           }
         }
       } else {
-        // Use a natural response
-        const hash = cleaned.length % naturalResponses.length;
-        cleaned = naturalResponses[hash];
+        // Use a warm response (not empty validation)
+        const hash = cleaned.length % warmResponses.length;
+        cleaned = warmResponses[hash];
       }
     }
   }
 
-  // Step 9: Final check - remove any remaining repeated greetings and reassurance
-  // Recalculate lowercase in case cleaned was modified
-  const lowerCleanedFinal = cleaned.toLowerCase();
-  for (const greeting of greetings) {
-    if (lowerCleanedFinal.startsWith(greeting + ',') || lowerCleanedFinal.startsWith(greeting + ' ')) {
-      const wasUsedBefore = allAssistantMessages.some(msg => 
-        msg.startsWith(greeting + ',') || msg.startsWith(greeting + ' ')
-      );
-      if (wasUsedBefore) {
-        const regex = new RegExp('^' + greeting.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[,\\s]*', 'gi');
-        cleaned = cleaned.replace(regex, '').trim();
-      }
-    }
-  }
-  
-  for (const phrase of reassurancePhrases) {
-    if (lowerCleanedFinal.includes(phrase)) {
-      const wasUsedBefore = allAssistantMessages.some(msg => msg.includes(phrase));
-      if (wasUsedBefore) {
-        const regex = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-        cleaned = cleaned.replace(regex, '').replace(/\s+/g, ' ').trim();
-      }
-    }
-  }
-  
-  for (const bannedPhrase of hardBannedPhrases) {
-    // Recalculate lowercase in case cleaned was modified
-    const lowerCleanedFinalCheck = cleaned.toLowerCase();
-    if (lowerCleanedFinalCheck.includes(bannedPhrase)) {
-      const wasUsedBefore = allAssistantMessages.some(msg => msg.includes(bannedPhrase));
-      if (wasUsedBefore) {
-        const regex = new RegExp(bannedPhrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-        cleaned = cleaned.replace(regex, '').replace(/\s+/g, ' ').trim();
-      }
-    }
-  }
+  // Step 9: REMOVED - Final check for repeated greetings/reassurance/banned phrases
+  // We now only check for exact-same-sentence repetition (isNearDuplicate), not phrase-level repetition
+  // This allows caring phrases like "I'm here with you" to be used multiple times if needed
 
   // Ensure response is not empty (use quiet presence)
   if (!cleaned || cleaned.trim().length < 5) {
     cleaned = "I'm here.";
   }
 
+  // Final step: Enforce friend response completeness
+  const isSelfHarm = userMessage ? /(hurt myself|kill myself|want to die|not safe|unsafe|suicide)/i.test(userMessage) : false;
+  cleaned = enforceFriendCompleteness(cleaned, userMessage || '', { 
+    isCryingOrOverwhelmed, 
+    isSelfHarm 
+  });
+
   return cleaned;
+}
+
+/**
+ * Check if two messages are near duplicates (same sentence or very similar).
+ * Returns true if normalized strings are equal OR similarity > 0.85.
+ */
+function isNearDuplicate(prev: string, cur: string): boolean {
+  if (!prev || !cur) return false;
+  
+  // Normalize: lowercase, remove extra spaces, remove punctuation
+  const normalize = (text: string): string => {
+    return text.toLowerCase()
+      .replace(/[.,!?;:]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+  
+  const normalizedPrev = normalize(prev);
+  const normalizedCur = normalize(cur);
+  
+  // Check exact match after normalization
+  if (normalizedPrev === normalizedCur) {
+    return true;
+  }
+  
+  // Check similarity using token overlap
+  const prevTokens = new Set(normalizedPrev.split(/\s+/).filter(w => w.length > 2));
+  const curTokens = new Set(normalizedCur.split(/\s+/).filter(w => w.length > 2));
+  
+  if (prevTokens.size === 0 || curTokens.size === 0) {
+    return false;
+  }
+  
+  // Calculate Jaccard similarity (intersection / union)
+  const intersection = new Set([...prevTokens].filter(x => curTokens.has(x)));
+  const union = new Set([...prevTokens, ...curTokens]);
+  const similarity = intersection.size / union.size;
+  
+  return similarity > 0.85;
+}
+
+/**
+ * Enforce friend response completeness - ensure responses are warm, caring, and complete.
+ * Replaces empty validation responses with proper friend-like responses.
+ */
+function enforceFriendCompleteness(
+  reply: string, 
+  userMessage: string, 
+  flags: { isCryingOrOverwhelmed?: boolean; isSelfHarm?: boolean }
+): string {
+  if (!reply || typeof reply !== 'string') {
+    reply = "I'm here with you.";
+  }
+  
+  const trimmed = reply.trim();
+  const wordCount = trimmed.split(/\s+/).filter(w => w.length > 0).length;
+  
+  // Check for empty validation patterns
+  const emptyValidationPattern = /^(i hear you|that sounds hard|what's going on|that makes sense|i understand)\.?$/i;
+  const isEmptyValidation = emptyValidationPattern.test(trimmed);
+  
+  // If too short (< 12 words) OR empty validation, replace with caring response
+  if (wordCount < 12 || isEmptyValidation) {
+    // Detect self-harm language
+    const selfHarmPattern = /(hurt myself|kill myself|want to die|not safe|unsafe|suicide)/i;
+    const isSelfHarm = selfHarmPattern.test(userMessage || '');
+    
+    if (isSelfHarm || flags.isSelfHarm) {
+      // Self-harm response: warm, protective, 1 safety question max
+      return "Hey… I'm really glad you told me. I care about you, and I'm here with you right now. I can hear how much pain you're in, and we don't have to solve everything at once. Are you somewhere safe right now?";
+    } else if (flags.isCryingOrOverwhelmed) {
+      // Crying/overwhelm: presence + soft reassurance (1-2 sentences)
+      const presenceResponses = [
+        "I'm here. You don't have to be okay right now. I've got you.",
+        "I'm here with you. It's okay to let it out.",
+        "I'm staying with you. You don't have to be strong right now."
+      ];
+      const hash = trimmed.length % presenceResponses.length;
+      return presenceResponses[hash];
+    } else {
+      // General caring response: presence + validate emotion + gentle continuation
+      const caringResponses = [
+        "I'm really glad you told me. I'm here with you, and we can take this one step at a time. What's been weighing on you?",
+        "I'm here with you. That sounds really hard to carry. You don't have to face this alone.",
+        "Talk to me—what's spiking it right now?"
+      ];
+      const hash = trimmed.length % caringResponses.length;
+      return caringResponses[hash];
+    }
+  }
+  
+  return reply;
 }
 
 /**
@@ -1657,7 +1831,8 @@ async function getAIPanicResponseOllama(
   history: ChatMessage[] = [],
   userContext?: { recentPosts?: Array<{ title: string; content: string; tags: string[]; createdAt: Date }> },
   conversationId?: string,
-  userId?: string
+  userId?: string,
+  detectedLang?: 'en' // Optional: detected language from STT (always 'en' - English only)
 ): Promise<string> {
   // Build context from conversation history
   let context = '';
@@ -1686,29 +1861,29 @@ async function getAIPanicResponseOllama(
     updateUserStyleProfile(userId, message, userMessageLength, adviceAccepted, questionEngagement);
   }
 
-  // Get user style profile for language and response length
-  const userProfile = userId ? getUserStyleProfile(userId) : null;
-  const userLanguage = userProfile?.detectedLanguage || detectUserLanguage(message);
+  // Reply language is always English (Hindi support removed)
+  const replyLanguage: 'english' = 'english';
+  console.log('[AI] [LANGUAGE] Reply language: English (always)');
+  console.log('[AI] [LANGUAGE] Latest user message (first 60 chars):', message.substring(0, 60));
   
   // Check for crying/overwhelm mode
   const isCryingOrOverwhelmed = detectCryingOrOverwhelm(message);
   
-  // Add language instruction if non-English detected
-  if (userLanguage !== 'english') {
-    const languageInstruction = userLanguage === 'hindi' 
-      ? 'IMPORTANT: Respond in Hindi (Devanagari script). Match the user\'s casual tone.\n\n'
-      : userLanguage === 'hinglish'
-      ? 'IMPORTANT: Respond in Hinglish (mix of Hindi and English). Match the user\'s casual tone and language mix.\n\n'
-      : 'IMPORTANT: Match the user\'s language style and respond naturally.\n\n';
-    context += languageInstruction;
+  // Check for panic attack
+  const isPanicAttack = detectPanicAttack(message);
+  
+  // Add panic attack instruction if detected
+  if (isPanicAttack) {
+    context += `PANIC ATTACK DETECTED: User is having a panic attack. Respond in 2-4 sentences: 1) Confirm + reassure, 2) Ask ONE simple safety/body question, 3) Offer ONE tiny grounding action only if needed. Keep it calm, human, not robotic.\n\n`;
   }
   
-  // Add crying/overwhelm mode instruction
-  if (isCryingOrOverwhelmed) {
+  // Add crying/overwhelm mode instruction (only if not panic attack)
+  if (isCryingOrOverwhelmed && !isPanicAttack) {
     context += `USER STATE: User is crying or overwhelmed. Prioritize presence. 1-2 sentences max. No questions unless user initiates. No action suggestions.\n\n`;
   }
 
   // Build prompt with system instructions
+  console.log('[AI] [PROMPT] Using system prompt: "HUMAN FRIEND MODE - Caring, warm, protective"');
   const prompt = `${SYSTEM_PROMPT}\n\n${context}Current message: ${message || 'Start'}`;
 
   const response = await askOllama(prompt, context || 'No previous context');
@@ -1726,7 +1901,8 @@ export async function getAIPanicResponse(
   history: ChatMessage[] = [],
   userContext?: { recentPosts?: Array<{ title: string; content: string; tags: string[]; createdAt: Date }> },
   conversationId?: string,
-  userId?: string
+  userId?: string,
+  detectedLang?: 'en' // Optional: detected language from STT (always 'en' - English only)
 ): Promise<string> {
   // CRISIS OVERRIDE: If crisis language detected, bypass normal AI and return human crisis response
   if (detectCrisisLanguage(message)) {
@@ -1742,22 +1918,39 @@ export async function getAIPanicResponse(
     updateUserStyleProfile(userId, message, userMessageLength, adviceAccepted, questionEngagement);
   }
 
-  // Get user style profile for language and response length
-  const userProfile = userId ? getUserStyleProfile(userId) : null;
-  const userLanguage = userProfile?.detectedLanguage || detectUserLanguage(message);
+  // Reply language is always English (Hindi support removed)
+  const replyLanguage: 'english' = 'english';
+  console.log('[AI] [LANGUAGE] Reply language: English (always)');
+  console.log('[AI] [LANGUAGE] Latest user message (first 60 chars):', message.substring(0, 60));
   
   // Check for crying/overwhelm mode
   const isCryingOrOverwhelmed = detectCryingOrOverwhelm(message);
 
+  // Check for panic attack
+  const isPanicAttack = detectPanicAttack(message);
+
   const provider = getAIProvider();
 
   if (provider === 'ollama') {
-    return await getAIPanicResponseOllama(message, history, userContext, conversationId, userId);
+    return await getAIPanicResponseOllama(message, history, userContext, conversationId, userId, detectedLang);
   }
 
   // Default to OpenAI
   // Build input string from system prompt and conversation history
+  console.log('[AI] [PROMPT] Using system prompt: "HUMAN FRIEND MODE - Caring, warm, protective"');
   let inputText = `System: ${SYSTEM_PROMPT}\n\n`;
+  
+  // Add panic attack instruction if detected
+  if (isPanicAttack) {
+    inputText += `PANIC ATTACK DETECTED: User is having a panic attack. Respond in 2-4 sentences: 1) Confirm + reassure, 2) Ask ONE simple safety/body question, 3) Offer ONE tiny grounding action only if needed. Keep it calm, human, not robotic.\n\n`;
+  }
+  
+  // Add crying/overwhelm mode instruction (only if not panic attack)
+  if (isCryingOrOverwhelmed && !isPanicAttack) {
+    inputText += `USER STATE: User is crying or overwhelmed. Prioritize presence. 1-2 sentences max. No questions unless user initiates. No action suggestions.\n\n`;
+  }
+  
+  // No language instruction needed - always English
   
   // Filter out assistant messages to check if this is truly the first user message
   const userMessages = history.filter(msg => msg.role === 'user');
@@ -1772,6 +1965,36 @@ export async function getAIPanicResponse(
     if (personalSummary) {
       // Only include personal context summary, not raw history dump
       inputText += `Personal context (use silently, do not mention explicitly):\n${personalSummary}\n\n`;
+    }
+    
+    // Check if user asked about history and inject evidence pack
+    const userAskedAboutHistory = message && (
+      message.toLowerCase().includes('remember') ||
+      message.toLowerCase().includes('do you know') ||
+      message.toLowerCase().includes('have i told you') ||
+      message.toLowerCase().includes('did i mention') ||
+      message.toLowerCase().includes('did i write') ||
+      message.toLowerCase().includes('post') ||
+      message.toLowerCase().includes('posted') ||
+      message.toLowerCase().includes('journal') ||
+      message.toLowerCase().includes('record') ||
+      message.toLowerCase().includes('check') ||
+      message.toLowerCase().includes('lately') ||
+      message.toLowerCase().includes('recently') ||
+      message.toLowerCase().includes('last time') ||
+      message.toLowerCase().includes('before') ||
+      message.toLowerCase().includes('earlier') ||
+      message.toLowerCase().includes('see if') ||
+      message.toLowerCase().includes('see whether') ||
+      /did i (post|write|mention|say)/i.test(message) ||
+      /what did i (post|write|say)/i.test(message) ||
+      /(see|check|look).*(post|journal|record)/i.test(message)
+    );
+    
+    if (userAskedAboutHistory) {
+      const evidencePack = buildHistoryEvidencePack(userContext.recentPosts, message);
+      inputText += evidencePack + "\n\n";
+      console.log('[AI] [HISTORY] User asked about history - injected evidence pack');
     }
   }
   
@@ -1796,4 +2019,3 @@ export async function getAIPanicResponse(
   const cleaned = cleanRepetitivePhrases(response);
   return guardAntiRepetition(cleaned, history, message, conversationId, userId, isCryingOrOverwhelmed);
 }
-

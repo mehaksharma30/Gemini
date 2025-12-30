@@ -33,13 +33,8 @@ export async function synthesizeToMp3(text: string, lang?: string): Promise<Buff
     throw new Error('Text exceeds maximum length of 2000 characters');
   }
 
-  // Determine voice based on language
-  let voiceName = 'en-US-JennyNeural'; // Default English voice
-  if (lang && lang.toLowerCase().startsWith('hi')) {
-    voiceName = 'hi-IN-SwaraNeural'; // Hindi voice
-  } else if (lang && lang.toLowerCase().startsWith('en')) {
-    voiceName = 'en-US-JennyNeural'; // English voice
-  }
+  // Always use English voice (Hindi support removed)
+  const voiceName = 'en-US-JennyNeural'; // English voice only
 
   console.log(`[Azure TTS] Starting synthesis - Text length: ${text.length}, Voice: ${voiceName}, Lang: ${lang || 'en'}`);
 

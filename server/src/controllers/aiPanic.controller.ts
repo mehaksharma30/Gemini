@@ -27,7 +27,13 @@ export const panicChat = async (req: Request, res: Response) => {
     }
 
     const userId = req.user.userId;
-    const { message, history, conversationId } = req.body;
+    const { message, history, conversationId, detectedLang } = req.body;
+    
+    // Log detected language for voice input (dev-only)
+    if (detectedLang) {
+      console.log('[AI] [LANGUAGE] Voice input detected, STT detectedLang:', detectedLang);
+      console.log('[AI] [LANGUAGE] Transcript (first 40 chars):', message?.substring(0, 40) || '');
+    }
 
     // Validate request body
     if (!message || typeof message !== 'string') {
@@ -98,13 +104,20 @@ export const panicChat = async (req: Request, res: Response) => {
     }
 
     // Get AI response with conversation history (always returns a string, never throws)
+    // Pass detectedLang if provided (voice input with STT auto-detection)
     const messageText = await getAIPanicResponse(
       message || 'Start', 
       conversationHistory,
       { recentPosts: userPosts },
       currentConversationId,
-      userId
+      userId,
+      detectedLang // Pass detected language from STT (if voice input)
     );
+    
+    // Log final reply language (dev-only)
+    if (detectedLang) {
+      console.log('[AI] [LANGUAGE] Final reply language:', detectedLang);
+    }
 
     // Add AI response to conversation history
     conversationHistory.push({

@@ -22,18 +22,8 @@ export const textToSpeech = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
-    // Detect language from text if not provided
-    let detectedLang = lang;
-    if (!detectedLang) {
-      // Simple detection: check if text contains Hindi characters
-      const hindiPattern = /[\u0900-\u097F]/;
-      if (hindiPattern.test(text)) {
-        detectedLang = 'hi';
-        console.log('[TTS] Detected Hindi text, using Hindi voice');
-      } else {
-        detectedLang = 'en';
-      }
-    }
+    // Always use English (Hindi support removed)
+    const detectedLang = lang || 'en';
 
     console.log(`[TTS] Request received - Text: "${text.substring(0, 50)}...", Lang: ${detectedLang}`);
 

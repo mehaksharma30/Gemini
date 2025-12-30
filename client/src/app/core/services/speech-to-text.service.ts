@@ -54,64 +54,44 @@ export class SpeechToTextService {
   }
 
   /**
-   * Detect language from last typed message (simple heuristic)
-   * Returns 'hi-IN' if Hindi characters detected, else 'en-US'
+   * Detect language from last typed message (always English)
+   * Returns 'en-US' always
    */
   detectLanguageFromLastMessage(lastMessage?: string): string {
-    if (!lastMessage) {
-      return 'hi-IN'; // Default to Hindi for better accuracy
-    }
-
-    // Check for Hindi characters (Devanagari script)
-    const hindiPattern = /[\u0900-\u097F]/;
-    const englishPattern = /[a-zA-Z]/;
-    
-    const hindiCount = (lastMessage.match(/[\u0900-\u097F]/g) || []).length;
-    const englishCount = (lastMessage.match(/[a-zA-Z]/g) || []).length;
-    
-    // If mostly English characters, use English
-    if (englishCount > hindiCount * 2) {
-      console.log('[STT] Detected English from last message');
-      return 'en-US';
-    }
-    
-    // Default to Hindi (better for Hinglish)
-    console.log('[STT] Detected Hindi/Hinglish from last message');
-    return 'hi-IN';
+    return 'en-US'; // Always use English
   }
 
   /**
-   * Transcribe speech to text using Azure Speech-to-Text (push-to-talk, continuous recognition)
-   * Returns the final transcribed text or throws an error
-   * @param lastMessage - Last typed message for language detection
+   * Transcribe speech to text using Azure Speech-to-Text (English only)
+   * Returns transcript text and detected language (always 'en')
+   * @param lastMessage - Last typed message (optional, not used)
    */
-  async transcribeOnce(lastMessage?: string): Promise<string> {
+  async transcribeOnce(lastMessage?: string): Promise<{ text: string; detectedLang: 'en' }> {
     try {
-      const detectedLang = this.detectLanguageFromLastMessage(lastMessage);
-      console.log('[STT] Starting transcription with language:', detectedLang);
+      console.log('[STT] Starting transcription (English only)');
 
       // Step 1: Get Azure Speech token
       const { token, region } = await this.getSpeechToken();
       console.log('[STT] Token received, region:', region);
 
-      // Step 2: Create speech config with token
+      // Step 2: Create speech config with token and English language
       const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(token, region);
-      speechConfig.speechRecognitionLanguage = detectedLang;
-      console.log('[STT] Speech recognition language set to:', detectedLang);
+      speechConfig.speechRecognitionLanguage = 'en-US';
+      console.log('[STT] Using English (en-US) only');
 
       // Step 3: Request microphone access
       console.log('[STT] Requesting microphone access...');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       console.log('[STT] Microphone access granted');
 
-      // Step 4: Create audio config and recognizer
+      // Step 4: Create audio config and recognizer (English only)
       const audioConfig = SpeechSDK.AudioConfig.fromMicrophoneInput();
       const recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
 
       // Step 5: Recognize speech (single utterance - final result only)
       console.log('[STT] Listening for speech...');
       
-      return new Promise<string>((resolve, reject) => {
+      return new Promise<{ text: string; detectedLang: 'en' }>((resolve, reject) => {
         let finalText = '';
         let hasFinalResult = false;
 
@@ -139,9 +119,14 @@ export class SpeechToTextService {
                 return;
               }
 
+              // Always English
+              const detectedLang: 'en' = 'en';
+
               console.log('[STT] Recognized text (final):', finalText);
+              console.log('[STT] Detected language: en (English only)');
+              console.log('[STT] Transcript (first 40 chars):', finalText.substring(0, 40));
               hasFinalResult = true;
-              resolve(finalText);
+              resolve({ text: finalText, detectedLang });
             } else if (result.reason === SpeechSDK.ResultReason.NoMatch) {
               console.warn('[STT] No speech match detected');
               reject(new Error('Couldn\'t catch that—try again'));

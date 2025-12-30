@@ -18,6 +18,8 @@
   "author": "Mehak Sharma",
   "license": "ISC",
   "dependencies": {
+    "@azure/web-pubsub": "^1.2.0",
+    "@azure/web-pubsub-express": "^1.0.6",
     "@types/multer": "^2.0.0",
     "axios": "^1.13.2",
     "bcrypt": "^5.1.1",

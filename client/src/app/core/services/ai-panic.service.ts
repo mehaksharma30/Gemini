@@ -11,6 +11,7 @@ export interface PanicChatRequest {
   message: string;
   history: ChatMessage[];
   conversationId?: string;
+  detectedLang?: 'en'; // Optional: detected language from STT (always 'en' - English only)
 }
 
 export interface PanicChatResponse {
