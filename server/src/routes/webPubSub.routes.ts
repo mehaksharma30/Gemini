@@ -1,8 +1,11 @@
 import express from 'express';
 import { authMiddleware } from '../middleware/auth.middleware';
-import { generateToken, sendToGroup, healthCheck } from '../controllers/webPubSub.controller';
+import { generateToken, sendToGroup, healthCheck, negotiate } from '../controllers/webPubSub.controller';
 
 const router = express.Router();
+
+// Negotiate Web PubSub connection (GET endpoint for client access URL)
+router.get('/negotiate', authMiddleware, negotiate);
 
 // Generate Web PubSub client access token (requires authentication)
 router.post('/token', authMiddleware, generateToken);

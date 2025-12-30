@@ -24,7 +24,7 @@ class WebPubSubService {
   constructor() {
     this.endpoint = process.env.AZURE_WEB_PUBSUB_ENDPOINT || '';
     this.accessKey = process.env.AZURE_WEB_PUBSUB_ACCESS_KEY || '';
-    this.hubName = process.env.AZURE_WEB_PUBSUB_HUB_NAME || 'voice';
+    this.hubName = process.env.AZURE_WEB_PUBSUB_HUB_NAME || 'panic';
 
     if (!WebPubSubServiceClient) {
       console.warn('[Web PubSub] SDK not available. Install packages to enable Web PubSub features.');

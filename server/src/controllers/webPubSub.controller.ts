@@ -2,6 +2,43 @@ import { Request, Response } from 'express';
 import webPubSubService from '../services/webPubSub.service';
 
 /**
+ * Negotiate Web PubSub connection - returns client access URL
+ * GET /api/pubsub/negotiate
+ * Returns: { url: string, userId: string }
+ */
+export const negotiate = async (req: Request, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const userId = req.user.userId;
+
+    if (!webPubSubService.isAvailable()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Web PubSub service not configured. Check environment variables.',
+      });
+    }
+
+    // Generate token for the user (no target user needed for negotiation)
+    const { url } = await webPubSubService.generateClientAccessToken(userId);
+
+    return res.json({
+      success: true,
+      url,
+      userId,
+    });
+  } catch (error: any) {
+    console.error('[Web PubSub Controller] Error negotiating:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to negotiate connection',
+    });
+  }
+};
+
+/**
  * Generate Web PubSub client access token
  * POST /api/webpubsub/token
  * Body: { userId: string, targetUserId?: string }

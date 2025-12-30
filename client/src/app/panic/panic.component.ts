@@ -9,7 +9,8 @@ import { AIPanicService, ChatMessage } from '../core/services/ai-panic.service';
 import { VoiceChatService } from '../core/services/voice-chat.service';
 import { SpeechToTextService } from '../core/services/speech-to-text.service';
 import { AuthService } from '../core/services/auth.service';
-import { AudioCommunicationService, AudioStreamState } from '../core/services/audio-communication.service';
+import { PanicCallService, IncomingCall } from '../core/services/panic-call.service';
+import { WebRTCAudioService } from '../core/services/webrtc-audio.service';
 
 @Component({
   selector: 'app-panic',
@@ -241,29 +242,17 @@ import { AudioCommunicationService, AudioStreamState } from '../core/services/au
               </div>
 
               <!-- Call Status (Only when in call) -->
-              <div class="testing-status" *ngIf="testCallState">
+              <div class="testing-status" *ngIf="isInTestCall">
                 <div class="status-item">
-                  <span class="status-label">Recording:</span>
-                  <span class="status-value" [class.active]="testCallState.isRecording">
-                    {{ testCallState.isRecording ? '🔴 ON' : '⚪ OFF' }}
-                  </span>
-                </div>
-                <div class="status-item">
-                  <span class="status-label">Playing:</span>
-                  <span class="status-value" [class.active]="testCallState.isPlaying">
-                    {{ testCallState.isPlaying ? '🔊 ON' : '⚪ OFF' }}
+                  <span class="status-label">Call Status:</span>
+                  <span class="status-value" [class.active]="isTestCallConnected">
+                    {{ isTestCallConnected ? '✅ CONNECTED' : '📞 CONNECTING...' }}
                   </span>
                 </div>
                 <div class="status-item">
                   <span class="status-label">Muted:</span>
-                  <span class="status-value" [class.active]="testCallState.isMuted">
-                    {{ testCallState.isMuted ? '🔇 YES' : '⚪ NO' }}
-                  </span>
-                </div>
-                <div class="status-item">
-                  <span class="status-label">Call Active:</span>
-                  <span class="status-value" [class.active]="isInTestCall">
-                    {{ isInTestCall ? '✅ YES' : '⚪ NO' }}
+                  <span class="status-value" [class.active]="isMuted()">
+                    {{ isMuted() ? '🔇 YES' : '⚪ NO' }}
                   </span>
                 </div>
               </div>
@@ -277,11 +266,18 @@ import { AudioCommunicationService, AudioStreamState } from '../core/services/au
                   📞 Start Call
                 </button>
                 <button
+                  class="test-btn alert-all-btn"
+                  (click)="startBroadcastCall()"
+                  [disabled]="isInTestCall || contacts.length === 0 || !isWebPubSubConnected"
+                >
+                  📢 Alert All
+                </button>
+                <button
                   class="test-btn mute-btn"
                   (click)="toggleTestMute()"
                   [disabled]="!isInTestCall"
                 >
-                  {{ testCallState?.isMuted ? '🔊 Unmute' : '🔇 Mute' }}
+                  {{ isMuted() ? '🔊 Unmute' : '🔇 Mute' }}
                 </button>
                 <button
                   class="test-btn end-call-btn"
@@ -290,6 +286,16 @@ import { AudioCommunicationService, AudioStreamState } from '../core/services/au
                 >
                   ❌ End Call
                 </button>
+              </div>
+              
+              <!-- Call Status -->
+              <div class="call-status" *ngIf="isInTestCall">
+                <p class="status-text" [class.calling]="callStatus === 'calling'" [class.connected]="callStatus === 'connected'" [class.declined]="callStatus === 'declined'" [class.no-answer]="callStatus === 'no_answer'">
+                  <span *ngIf="callStatus === 'calling'">📞 Calling...</span>
+                  <span *ngIf="callStatus === 'connected'">✅ Connected</span>
+                  <span *ngIf="callStatus === 'declined'">❌ Declined</span>
+                  <span *ngIf="callStatus === 'no_answer'">⏱️ No Answer</span>
+                </p>
               </div>
 
               <div class="testing-info" *ngIf="!isInTestCall">
@@ -304,6 +310,28 @@ import { AudioCommunicationService, AudioStreamState } from '../core/services/au
                 </p>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Incoming Call Modal -->
+      <div class="incoming-call-modal" *ngIf="showIncomingCallModal && incomingCall">
+        <div class="modal-overlay" (click)="declineIncomingCall()"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Incoming Call</h3>
+          </div>
+          <div class="modal-body">
+            <p class="caller-name">{{ incomingCall.fromName }} is calling you</p>
+            <p class="call-mode" *ngIf="incomingCall.mode === 'broadcast'">📢 Broadcast Call</p>
+          </div>
+          <div class="modal-actions">
+            <button class="accept-btn" (click)="acceptIncomingCall()">
+              ✅ Accept
+            </button>
+            <button class="decline-btn" (click)="declineIncomingCall()">
+              ❌ Decline
+            </button>
           </div>
         </div>
       </div>
@@ -1126,6 +1154,131 @@ import { AudioCommunicationService, AudioStreamState } from '../core/services/au
     .info-text strong {
       color: var(--teal-accent);
     }
+    .alert-all-btn {
+      background: rgba(139, 92, 246, 0.2);
+      border-color: #8b5cf6;
+      color: #8b5cf6;
+    }
+    .alert-all-btn:hover:not(:disabled) {
+      background: rgba(139, 92, 246, 0.3);
+    }
+    .call-status {
+      margin-top: 1rem;
+      padding: 1rem;
+      background: var(--bg-tertiary);
+      border-radius: 8px;
+      text-align: center;
+    }
+    .status-text {
+      margin: 0;
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+    .status-text.calling {
+      color: #3b82f6;
+    }
+    .status-text.connected {
+      color: #10b981;
+    }
+    .status-text.declined {
+      color: #ef4444;
+    }
+    .status-text.no-answer {
+      color: #f59e0b;
+    }
+    /* Incoming Call Modal */
+    .incoming-call-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+    }
+    .modal-content {
+      position: relative;
+      background: var(--card-gradient);
+      border: 2px solid var(--teal-accent);
+      border-radius: 16px;
+      padding: 2rem;
+      max-width: 400px;
+      width: 90%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      z-index: 1001;
+      animation: slideIn 0.3s ease-out;
+    }
+    @keyframes slideIn {
+      from {
+        transform: translateY(-20px);
+        opacity: 0;
+      }
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+    .modal-header h3 {
+      margin: 0 0 1rem 0;
+      color: var(--text-primary);
+      font-size: 1.5rem;
+    }
+    .modal-body {
+      margin-bottom: 1.5rem;
+    }
+    .caller-name {
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin: 0 0 0.5rem 0;
+    }
+    .call-mode {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      margin: 0;
+    }
+    .modal-actions {
+      display: flex;
+      gap: 1rem;
+    }
+    .accept-btn, .decline-btn {
+      flex: 1;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      border: none;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    .accept-btn {
+      background: var(--button-gradient);
+      color: var(--light-gray);
+    }
+    .accept-btn:hover {
+      background: var(--button-hover);
+      transform: translateY(-2px);
+    }
+    .decline-btn {
+      background: rgba(220, 38, 38, 0.2);
+      color: #dc2626;
+      border: 2px solid #dc2626;
+    }
+    .decline-btn:hover {
+      background: rgba(220, 38, 38, 0.3);
+      transform: translateY(-2px);
+    }
   `]
 })
 export class PanicComponent implements OnInit, OnDestroy {
@@ -1139,7 +1292,8 @@ export class PanicComponent implements OnInit, OnDestroy {
   private speechToTextService = inject(SpeechToTextService);
   private http = inject(HttpClient);
   private authService = inject(AuthService);
-  private audioCommService = inject(AudioCommunicationService);
+  private panicCallService = inject(PanicCallService);
+  private webrtcService = inject(WebRTCAudioService);
   private cdr = inject(ChangeDetectorRef);
 
   message = '';
@@ -1152,15 +1306,23 @@ export class PanicComponent implements OnInit, OnDestroy {
   testSelectedContactId: string = '';
   isInTestCall: boolean = false;
   isTestCallConnected: boolean = false;
-  testCallState: AudioStreamState | null = null;
-  private testCallStateSubscription: any = null;
-  private testCallErrorSubscription: any = null;
+  callStatus: string = ''; // 'idle' | 'calling' | 'connected' | 'declined' | 'no_answer'
+  currentCallId: string = '';
+  isCaller: boolean = false;
+  
+  // Incoming call
+  incomingCall: IncomingCall | null = null;
+  showIncomingCallModal: boolean = false;
   
   // Web PubSub connection status
   isWebPubSubConnected: boolean = false;
   webPubSubConnectionError: string = '';
   isTestingConnection: boolean = false;
-  private webPubSubConnectionSubscription: any = null;
+  private subscriptions: any[] = [];
+  
+  // Broadcast call tracking
+  private broadcastCallTimeout: any = null;
+  private broadcastContactIds: string[] = [];
   showAIChat = false;
   chatHistory: ChatMessage[] = [];
   chatInput = '';
@@ -1173,7 +1335,42 @@ export class PanicComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.loadEmergencyContacts();
-    this.checkWebPubSubConnection();
+    this.setupCallSubscriptions();
+  }
+  
+  setupCallSubscriptions(): void {
+    // Subscribe to PubSub connection status
+    const connSub = this.panicCallService.connected$.subscribe(connected => {
+      this.isWebPubSubConnected = connected;
+      if (!connected) {
+        this.webPubSubConnectionError = 'Disconnected';
+      } else {
+        this.webPubSubConnectionError = '';
+      }
+      this.cdr.detectChanges();
+    });
+    this.subscriptions.push(connSub);
+    
+    // Subscribe to incoming calls
+    const incomingSub = this.panicCallService.incomingCall$.subscribe(call => {
+      this.incomingCall = call;
+      this.showIncomingCallModal = true;
+      this.cdr.detectChanges();
+    });
+    this.subscriptions.push(incomingSub);
+    
+    // Subscribe to call signals
+    const signalSub = this.panicCallService.callSignal$.subscribe(signal => {
+      this.handleCallSignal(signal);
+    });
+    this.subscriptions.push(signalSub);
+    
+    // Subscribe to WebRTC state
+    const webrtcSub = this.webrtcService.state$.subscribe(state => {
+      this.isTestCallConnected = state.isConnected;
+      this.cdr.detectChanges();
+    });
+    this.subscriptions.push(webrtcSub);
   }
 
   loadEmergencyContacts(): void {
@@ -1890,44 +2087,12 @@ export class PanicComponent implements OnInit, OnDestroy {
     }
     this.cleanupAudio();
     
-    // Cleanup test call subscriptions
-    if (this.testCallStateSubscription) {
-      this.testCallStateSubscription.unsubscribe();
-    }
-    if (this.testCallErrorSubscription) {
-      this.testCallErrorSubscription.unsubscribe();
-    }
-    if (this.webPubSubConnectionSubscription) {
-      this.webPubSubConnectionSubscription.unsubscribe();
-    }
-  }
-
-  // Web PubSub Connection Methods
-  checkWebPubSubConnection(): void {
-    const webPubSubService = (this.audioCommService as any)['webPubSubService'];
-    if (webPubSubService) {
-      // Initially disconnected until user tests connection
-      this.isWebPubSubConnected = false;
-      this.webPubSubConnectionError = 'Click "Test Connection" to establish WebSocket connection';
-      
-      // Subscribe to connection changes
-      this.webPubSubConnectionSubscription = webPubSubService.connected$.subscribe((connected: boolean) => {
-        this.isWebPubSubConnected = connected;
-        if (connected) {
-          this.webPubSubConnectionError = '';
-          console.log('[Testing Talk] Web PubSub connected');
-        } else {
-          console.log('[Testing Talk] Web PubSub disconnected');
-          if (!this.webPubSubConnectionError) {
-            this.webPubSubConnectionError = 'Connection lost. Click "Test Connection" to reconnect.';
-          }
-        }
-        this.cdr.detectChanges();
-      });
-    } else {
-      this.isWebPubSubConnected = false;
-      this.webPubSubConnectionError = 'Web PubSub service not available';
-    }
+    // Cleanup subscriptions
+    this.subscriptions.forEach(sub => sub.unsubscribe());
+    this.subscriptions = [];
+    
+    // Disconnect from PubSub
+    this.panicCallService.disconnect().catch(console.error);
   }
 
   async testWebPubSubConnection(): Promise<void> {
@@ -1947,42 +2112,23 @@ export class PanicComponent implements OnInit, OnDestroy {
       console.log('[Testing Talk] Testing Web PubSub connection...');
       console.log('[Testing Talk] Current user ID:', currentUser.id);
       
-      const webPubSubService = (this.audioCommService as any)['webPubSubService'];
-      if (!webPubSubService) {
-        throw new Error('Web PubSub service not available. Check if @azure/web-pubsub-client is installed.');
-      }
-
-      console.log('[Testing Talk] Web PubSub service found, attempting to connect...');
-
-      // Try to connect (without a target user for testing)
-      await webPubSubService.connect();
+      await this.panicCallService.connect(currentUser.id);
       
-      console.log('[Testing Talk] Connect() called, waiting for connection...');
-      
-      // Wait longer for connection to establish and listen for events
+      // Wait for connection
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      const isConnected = webPubSubService.isConnected();
+      const isConnected = this.panicCallService.isConnectedToPubSub();
       this.isWebPubSubConnected = isConnected;
-      
-      console.log('[Testing Talk] Connection status after wait:', isConnected);
       
       if (isConnected) {
         this.webPubSubConnectionError = '';
         this.toastService.show('✅ Web PubSub connection successful!', 'success');
         console.log('[Testing Talk] Web PubSub connection test: SUCCESS');
       } else {
-        // Check if there's a more specific error
-        const errorMsg = 'Connection failed. Check: 1) Backend is running, 2) Azure Web PubSub env vars are set, 3) Backend /api/webpubsub/token endpoint works';
-        throw new Error(errorMsg);
+        throw new Error('Connection failed. Check backend and Azure Web PubSub configuration.');
       }
     } catch (error: any) {
       console.error('[Testing Talk] Web PubSub connection test failed:', error);
-      console.error('[Testing Talk] Error details:', {
-        message: error.message,
-        stack: error.stack,
-        name: error.name
-      });
       this.isWebPubSubConnected = false;
       this.webPubSubConnectionError = error.message || 'Connection test failed. Check console for details.';
       this.toastService.show(`❌ Connection failed: ${this.webPubSubConnectionError}`, 'error');
@@ -2005,6 +2151,11 @@ export class PanicComponent implements OnInit, OnDestroy {
         return;
       }
 
+      if (!this.isWebPubSubConnected) {
+        this.toastService.show('Please connect to Web PubSub first', 'error');
+        return;
+      }
+
       // Find the selected contact
       const selectedContact = this.contacts.find(c => c.id === this.testSelectedContactId);
       if (!selectedContact) {
@@ -2012,46 +2163,97 @@ export class PanicComponent implements OnInit, OnDestroy {
         return;
       }
 
-      console.log('[Testing Talk] Starting call to contact:', selectedContact.username, '(', this.testSelectedContactId, ')');
-      
-      // Initialize audio communication
-      await this.audioCommService.initialize(currentUser.id, this.testSelectedContactId);
-      
-      // Subscribe to state changes
-      this.testCallStateSubscription = this.audioCommService.state$.subscribe(state => {
-        this.testCallState = state;
-        this.cdr.detectChanges();
-      });
-
-      // Subscribe to errors
-      this.testCallErrorSubscription = this.audioCommService.errors$.subscribe(error => {
-        console.error('[Testing Talk] Error:', error);
-        this.toastService.show(`Call error: ${error}`, 'error');
-      });
-
-      // Check Web PubSub connection
-      const webPubSubService = (this.audioCommService as any)['webPubSubService'];
-      this.isTestCallConnected = webPubSubService.isConnected();
-      this.isWebPubSubConnected = this.isTestCallConnected;
-      
-      if (!this.isTestCallConnected) {
-        throw new Error('Web PubSub not connected. Please test connection first.');
-      }
-      
-      // Start recording
-      await this.audioCommService.startRecording();
-      
+      // Generate call ID
+      this.currentCallId = `call_${Date.now()}_${currentUser.id}`;
+      this.isCaller = true;
+      this.callStatus = 'calling';
       this.isInTestCall = true;
-      this.toastService.show(`Call started with ${selectedContact.username}! Speak into your microphone.`, 'success');
       
-      console.log('[Testing Talk] Call started successfully');
+      // Join call group
+      await this.panicCallService.joinCallGroup(this.currentCallId);
+      
+      // Initialize WebRTC
+      await this.webrtcService.initialize(this.currentCallId, true);
+      
+      // Create and send offer
+      const offer = await this.webrtcService.createOffer();
+      await this.panicCallService.sendWebRTCOffer(this.currentCallId, offer);
+      
+      // Send incoming call notification
+      await this.panicCallService.sendIncomingCall(
+        this.currentCallId,
+        this.testSelectedContactId,
+        currentUser.username || 'Unknown',
+        'single'
+      );
+      
+      // Set up ICE candidate handler
+      const iceSub = this.webrtcService.getICECandidates().subscribe(candidate => {
+        this.panicCallService.sendWebRTCICE(this.currentCallId, candidate);
+      });
+      this.subscriptions.push(iceSub);
+      
+      this.toastService.show(`Calling ${selectedContact.username}...`, 'info');
+      console.log('[Testing Talk] Call initiated');
     } catch (error: any) {
       console.error('[Testing Talk] Failed to start call:', error);
-      this.toastService.show(
-        error.message || 'Failed to start call. Check console for details.',
-        'error'
+      this.toastService.show(error.message || 'Failed to start call', 'error');
+      await this.endTestCall();
+    }
+  }
+
+  async startBroadcastCall(): Promise<void> {
+    if (this.isInTestCall || this.contacts.length === 0) {
+      return;
+    }
+
+    try {
+      const currentUser = this.authService.currentUser();
+      if (!currentUser || !currentUser.id) {
+        this.toastService.show('You must be logged in', 'error');
+        return;
+      }
+
+      if (!this.isWebPubSubConnected) {
+        this.toastService.show('Please connect to Web PubSub first', 'error');
+        return;
+      }
+
+      // Generate call ID
+      this.currentCallId = `call_${Date.now()}_${currentUser.id}`;
+      this.isCaller = true;
+      this.callStatus = 'calling';
+      this.isInTestCall = true;
+      this.broadcastContactIds = this.contacts.map(c => c.id);
+      
+      // Join call group
+      await this.panicCallService.joinCallGroup(this.currentCallId);
+      
+      // Initialize WebRTC
+      await this.webrtcService.initialize(this.currentCallId, true);
+      
+      // Send broadcast call to all contacts
+      await this.panicCallService.sendBroadcastCall(
+        this.currentCallId,
+        this.broadcastContactIds,
+        currentUser.username || 'Unknown'
       );
-      this.isInTestCall = false;
+      
+      // Set timeout for no answer (20 seconds)
+      this.broadcastCallTimeout = setTimeout(() => {
+        if (this.callStatus === 'calling') {
+          this.callStatus = 'no_answer';
+          this.toastService.show('No answer from any contact', 'error');
+          this.endTestCall();
+        }
+      }, 20000);
+      
+      this.toastService.show(`Calling all ${this.contacts.length} contacts...`, 'info');
+      console.log('[Testing Talk] Broadcast call initiated');
+    } catch (error: any) {
+      console.error('[Testing Talk] Failed to start broadcast call:', error);
+      this.toastService.show(error.message || 'Failed to start broadcast call', 'error');
+      await this.endTestCall();
     }
   }
 
@@ -2063,28 +2265,43 @@ export class PanicComponent implements OnInit, OnDestroy {
     try {
       console.log('[Testing Talk] Ending call...');
       
-      await this.audioCommService.cleanup();
+      // Send call end signal
+      if (this.currentCallId) {
+        await this.panicCallService.sendCallEnd(this.currentCallId);
+        await this.panicCallService.leaveCallGroup(this.currentCallId);
+      }
+      
+      // Cleanup WebRTC
+      await this.webrtcService.cleanup();
+      
+      // Clear broadcast timeout
+      if (this.broadcastCallTimeout) {
+        clearTimeout(this.broadcastCallTimeout);
+        this.broadcastCallTimeout = null;
+      }
       
       this.isInTestCall = false;
       this.isTestCallConnected = false;
-      this.testCallState = null;
-      
-      if (this.testCallStateSubscription) {
-        this.testCallStateSubscription.unsubscribe();
-        this.testCallStateSubscription = null;
-      }
-      
-      if (this.testCallErrorSubscription) {
-        this.testCallErrorSubscription.unsubscribe();
-        this.testCallErrorSubscription = null;
-      }
+      this.callStatus = 'idle';
+      this.currentCallId = '';
+      this.isCaller = false;
+      this.broadcastContactIds = [];
       
       this.toastService.show('Call ended', 'info');
       console.log('[Testing Talk] Call ended');
     } catch (error: any) {
       console.error('[Testing Talk] Error ending call:', error);
       this.toastService.show('Error ending call', 'error');
+    } finally {
+      this.cdr.detectChanges();
     }
+  }
+
+  isMuted(): boolean {
+    if (!this.isInTestCall) {
+      return false;
+    }
+    return this.webrtcService.isMuted();
   }
 
   async toggleTestMute(): Promise<void> {
@@ -2093,15 +2310,143 @@ export class PanicComponent implements OnInit, OnDestroy {
     }
 
     try {
-      await this.audioCommService.toggleMute();
-      const state = this.audioCommService.getState();
+      this.webrtcService.toggleMute();
+      const muted = this.webrtcService.isMuted();
       this.toastService.show(
-        state.isMuted ? 'Microphone muted' : 'Microphone unmuted',
+        muted ? 'Microphone muted' : 'Microphone unmuted',
         'info'
       );
     } catch (error: any) {
       console.error('[Testing Talk] Error toggling mute:', error);
       this.toastService.show('Error toggling mute', 'error');
+    }
+  }
+
+  // Handle incoming call
+  async acceptIncomingCall(): Promise<void> {
+    if (!this.incomingCall) {
+      return;
+    }
+
+    try {
+      const currentUser = this.authService.currentUser();
+      if (!currentUser || !currentUser.id) {
+        this.toastService.show('You must be logged in', 'error');
+        return;
+      }
+
+      this.currentCallId = this.incomingCall.callId;
+      this.isCaller = false;
+      this.callStatus = 'connected';
+      this.isInTestCall = true;
+      this.showIncomingCallModal = false;
+      
+      // Join call group
+      await this.panicCallService.joinCallGroup(this.currentCallId);
+      
+      // Send accept signal
+      await this.panicCallService.sendCallAccept(this.currentCallId, this.incomingCall.fromUserId);
+      
+      // Initialize WebRTC (callee)
+      await this.webrtcService.initialize(this.currentCallId, false);
+      
+      // Set up ICE candidate handler
+      const iceSub = this.webrtcService.getICECandidates().subscribe(candidate => {
+        this.panicCallService.sendWebRTCICE(this.currentCallId, candidate);
+      });
+      this.subscriptions.push(iceSub);
+      
+      this.toastService.show(`Connected to ${this.incomingCall.fromName}`, 'success');
+      console.log('[Testing Talk] Incoming call accepted');
+    } catch (error: any) {
+      console.error('[Testing Talk] Error accepting call:', error);
+      this.toastService.show(error.message || 'Failed to accept call', 'error');
+      this.showIncomingCallModal = false;
+      this.incomingCall = null;
+    }
+  }
+
+  async declineIncomingCall(): Promise<void> {
+    if (!this.incomingCall) {
+      return;
+    }
+
+    try {
+      await this.panicCallService.sendCallDecline(this.incomingCall.callId, this.incomingCall.fromUserId);
+      this.showIncomingCallModal = false;
+      this.incomingCall = null;
+      this.toastService.show('Call declined', 'info');
+    } catch (error: any) {
+      console.error('[Testing Talk] Error declining call:', error);
+    }
+  }
+
+  // Handle call signals
+  private async handleCallSignal(signal: any): Promise<void> {
+    if (!this.isInTestCall || signal.callId !== this.currentCallId) {
+      return;
+    }
+
+    try {
+      switch (signal.type) {
+        case 'call_accept':
+          if (this.isCaller && this.callStatus === 'calling') {
+            this.callStatus = 'connected';
+            this.isTestCallConnected = true;
+            
+            // If broadcast, cancel other calls
+            if (this.broadcastContactIds.length > 0) {
+              await this.panicCallService.sendCallCancelled(this.currentCallId, this.broadcastContactIds);
+              if (this.broadcastCallTimeout) {
+                clearTimeout(this.broadcastCallTimeout);
+                this.broadcastCallTimeout = null;
+              }
+            }
+            
+            this.toastService.show('Call connected!', 'success');
+          }
+          break;
+          
+        case 'call_decline':
+          if (this.isCaller && this.callStatus === 'calling') {
+            this.callStatus = 'declined';
+            this.toastService.show('Call declined', 'error');
+            await this.endTestCall();
+          }
+          break;
+          
+        case 'call_cancelled':
+          if (!this.isCaller) {
+            this.showIncomingCallModal = false;
+            this.incomingCall = null;
+            this.toastService.show('Call was cancelled', 'info');
+          }
+          break;
+          
+        case 'call_end':
+          this.toastService.show('Call ended by other party', 'info');
+          await this.endTestCall();
+          break;
+          
+        case 'webrtc_offer':
+          if (!this.isCaller) {
+            const answer = await this.webrtcService.handleOffer(signal.sdp);
+            await this.panicCallService.sendWebRTCAnswer(this.currentCallId, answer);
+          }
+          break;
+          
+        case 'webrtc_answer':
+          if (this.isCaller) {
+            await this.webrtcService.handleAnswer(signal.sdp);
+          }
+          break;
+          
+        case 'webrtc_ice':
+          await this.webrtcService.addICECandidate(signal.candidate);
+          break;
+      }
+    } catch (error: any) {
+      console.error('[Testing Talk] Error handling signal:', error);
     }
   }
 
