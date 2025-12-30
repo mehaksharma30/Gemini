@@ -1,0 +1,40 @@
+name: Azure Static Web Apps CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build_and_deploy_job:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: false
+
+      # (Optional) Fail fast if secret missing
+      - name: Check token presence
+        run: |
+          if [ -z "${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}" ]; then
+            echo "Missing secret: AZURE_STATIC_WEB_APPS_API_TOKEN"
+            exit 1
+          fi
+
+      - name: Build and Deploy
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+
+          # Your Angular app lives in /client
+          app_location: "client"
+
+          # No Azure Functions API
+          api_location: ""
+
+          # Angular build output (as you used)
+          output_location: "dist/client/browser"
