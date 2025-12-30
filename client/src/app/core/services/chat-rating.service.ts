@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { environment } from '../../../environments/environment';
 
 export interface RatingResponse {
   success: boolean;
@@ -18,7 +19,7 @@ export interface RatingResponse {
   providedIn: 'root',
 })
 export class ChatRatingService {
-  private apiUrl = 'http://localhost:3000/api/chat/ratings';
+  private apiUrl = `${environment.apiUrl}/chat/ratings`;
 
   constructor(private http: HttpClient) {}
 

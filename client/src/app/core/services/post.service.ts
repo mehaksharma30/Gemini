@@ -2,12 +2,13 @@ import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { ApiResponse, Post } from '../models/post.model';
+import { environment } from '../../../environments/environment';
 
 @Injectable({
   providedIn: 'root',
 })
 export class PostService {
-  private apiUrl = 'http://localhost:3000/api/posts';
+  private apiUrl = `${environment.apiUrl}/posts`;
 
   constructor(private http: HttpClient) {}
 
@@ -53,7 +54,7 @@ export class PostService {
     formData.append('image', file);
 
     return this.http.post<{ success: boolean; imageUrl: string; message?: string }>(
-      'http://localhost:3000/api/uploads/post-image',
+      `${environment.apiUrl}/uploads/post-image`,
       formData
     );
   }

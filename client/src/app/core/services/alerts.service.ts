@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { environment } from '../../../environments/environment';
 
 export interface Alert {
   id: string;
@@ -33,7 +34,7 @@ export interface AcknowledgeAlertResponse {
   providedIn: 'root',
 })
 export class AlertsService {
-  private apiUrl = 'http://localhost:3000/api/alerts';
+  private apiUrl = `${environment.apiUrl}/alerts`;
 
   constructor(private http: HttpClient) {}
 

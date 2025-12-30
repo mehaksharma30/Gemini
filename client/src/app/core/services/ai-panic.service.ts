@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, firstValueFrom } from 'rxjs';
+import { environment } from '../../../environments/environment';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -25,7 +26,7 @@ export interface PanicChatResponse {
   providedIn: 'root',
 })
 export class AIPanicService {
-  private apiUrl = 'http://localhost:3000/api/ai';
+  private apiUrl = `${environment.apiUrl}/ai`;
 
   constructor(private http: HttpClient) {}
 

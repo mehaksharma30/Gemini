@@ -11,6 +11,7 @@ import { SpeechToTextService } from '../core/services/speech-to-text.service';
 import { AuthService } from '../core/services/auth.service';
 import { PanicCallService, IncomingCall } from '../core/services/panic-call.service';
 import { WebRTCAudioService } from '../core/services/webrtc-audio.service';
+import { environment } from '../../environments/environment';
 
 @Component({
   selector: 'app-panic',
@@ -1411,7 +1412,7 @@ export class PanicComponent implements OnInit, OnDestroy {
 
     console.log('[Panic] Requesting initial AI message:', {
       payload,
-      endpoint: 'http://localhost:3000/api/ai/panic-chat',
+      endpoint: `${environment.apiUrl}/ai/panic-chat`,
     });
 
     this.aiPanicService.sendMessage(payload).subscribe({
@@ -1449,7 +1450,7 @@ export class PanicComponent implements OnInit, OnDestroy {
           statusText: err.statusText || 'unknown',
           error: err.error || err.message,
           errorBody: err.error ? JSON.stringify(err.error, null, 2) : 'none',
-          url: err.url || 'http://localhost:3000/api/ai/panic-chat',
+          url: err.url || `${environment.apiUrl}/ai/panic-chat`,
         };
         
         console.error('[Panic] Initial message request failed:', errorDetails);
@@ -1494,7 +1495,7 @@ export class PanicComponent implements OnInit, OnDestroy {
       message: userMessage.substring(0, 50) + (userMessage.length > 50 ? '...' : ''),
       historyLength: payload.history.length,
       conversationId: payload.conversationId || 'none',
-      endpoint: 'http://localhost:3000/api/ai/panic-chat',
+      endpoint: `${environment.apiUrl}/ai/panic-chat`,
     });
 
     this.aiPanicService.sendMessage(payload).subscribe({
@@ -1540,7 +1541,7 @@ export class PanicComponent implements OnInit, OnDestroy {
           statusText: err.statusText || 'unknown',
           error: err.error || err.message,
           errorBody: err.error ? JSON.stringify(err.error, null, 2) : 'none',
-          url: err.url || 'http://localhost:3000/api/ai/panic-chat',
+          url: err.url || `${environment.apiUrl}/ai/panic-chat`,
         };
         
         console.error('[Panic] Message send failed:', errorDetails);
@@ -1741,7 +1742,7 @@ export class PanicComponent implements OnInit, OnDestroy {
       console.log('[Panic] Using English voice (always)');
 
       // Call TTS endpoint
-      const apiUrl = 'http://localhost:3000/api/ai/tts';
+      const apiUrl = `${environment.apiUrl}/ai/tts`;
       const authToken = this.authService.getToken();
       
       if (!authToken) {
@@ -2001,7 +2002,7 @@ export class PanicComponent implements OnInit, OnDestroy {
       console.log('[Panic] Using English voice (always)');
 
       // Call TTS endpoint
-      const apiUrl = 'http://localhost:3000/api/ai/tts';
+      const apiUrl = `${environment.apiUrl}/ai/tts`;
       const authToken = this.authService.getToken();
       
       if (!authToken) {

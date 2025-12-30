@@ -7,12 +7,13 @@ import {
   ConversationDetail,
   DMApiResponse,
 } from '../models/dm.model';
+import { environment } from '../../../environments/environment';
 
 @Injectable({
   providedIn: 'root',
 })
 export class DMService {
-  private apiUrl = 'http://localhost:3000/api/dm';
+  private apiUrl = `${environment.apiUrl}/dm`;
 
   constructor(private http: HttpClient) {}
 

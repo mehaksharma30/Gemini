@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
 import { AIPanicService, ChatMessage } from './ai-panic.service';
 import { AuthService } from './auth.service';
+import { environment } from '../../../environments/environment';
 
 export interface VoiceChatResult {
   userText: string;
@@ -12,7 +13,7 @@ export interface VoiceChatResult {
   providedIn: 'root',
 })
 export class VoiceChatService {
-  private apiUrl = 'http://localhost:3000/api';
+  private apiUrl = environment.apiUrl;
 
   constructor(
     private aiPanicService: AIPanicService,

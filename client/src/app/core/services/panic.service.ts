@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { environment } from '../../../environments/environment';
 
 export interface TriggerPanicRequest {
   mode: 'AI' | 'CONTACT' | 'GROUP';
@@ -26,7 +27,7 @@ export interface TriggerPanicResponse {
   providedIn: 'root',
 })
 export class PanicService {
-  private apiUrl = 'http://localhost:3000/api/panic';
+  private apiUrl = `${environment.apiUrl}/panic`;
 
   constructor(private http: HttpClient) {}
 

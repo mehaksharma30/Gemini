@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { environment } from '../../../environments/environment';
 
 export interface EmergencyContactUser {
   id: string;
@@ -18,7 +19,7 @@ export interface EmergencyContactsResponse {
   providedIn: 'root',
 })
 export class EmergencyService {
-  private apiUrl = 'http://localhost:3000/api/emergency';
+  private apiUrl = `${environment.apiUrl}/emergency`;
 
   constructor(private http: HttpClient) {}
 

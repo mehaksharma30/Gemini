@@ -3,6 +3,7 @@ import { Observable, Subject, BehaviorSubject } from 'rxjs';
 import { io, Socket } from 'socket.io-client';
 import { AuthService } from './auth.service';
 import { DirectMessage } from '../models/dm.model';
+import { environment } from '../../../environments/environment';
 
 @Injectable({
   providedIn: 'root',
@@ -27,7 +28,9 @@ export class ChatSocketService {
       return;
     }
 
-    this.socket = io('http://localhost:3000', {
+    // Extract base URL from environment.apiUrl (remove /api if present)
+    const baseUrl = environment.apiUrl.replace(/\/api\/?$/, '');
+    this.socket = io(baseUrl, {
       auth: {
         token,
       },

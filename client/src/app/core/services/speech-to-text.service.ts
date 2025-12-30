@@ -1,12 +1,13 @@
 import { Injectable } from '@angular/core';
 import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
 import { AuthService } from './auth.service';
+import { environment } from '../../../environments/environment';
 
 @Injectable({
   providedIn: 'root',
 })
 export class SpeechToTextService {
-  private apiUrl = 'http://localhost:3000/api';
+  private apiUrl = environment.apiUrl;
 
   constructor(
     private authService: AuthService
