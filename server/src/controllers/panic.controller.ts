@@ -39,7 +39,7 @@ export const triggerPanic = async (req: Request, res: Response) => {
       return res.json({
         success: true,
         data: {
-          incidentId: incident._id.toString(),
+          incidentId: (incident._id as mongoose.Types.ObjectId).toString(),
           mode: 'AI',
           replyText: "I'm here with you. Let's breathe together—inhale... hold... exhale... You're not alone, and this feeling will pass. What would help you feel a bit better right now?",
         },
@@ -117,7 +117,7 @@ export const triggerPanic = async (req: Request, res: Response) => {
       return res.json({
         success: true,
         data: {
-          incidentId: incident._id.toString(),
+          incidentId: (incident._id as mongoose.Types.ObjectId).toString(),
           mode: 'CONTACT',
           alertSent: true,
           emailSent,
@@ -192,7 +192,7 @@ export const triggerPanic = async (req: Request, res: Response) => {
       return res.json({
         success: true,
         data: {
-          incidentId: incident._id.toString(),
+          incidentId: (incident._id as mongoose.Types.ObjectId).toString(),
           mode: 'GROUP',
           alertSentCount,
           emailSentCount,

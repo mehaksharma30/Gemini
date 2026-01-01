@@ -84,7 +84,7 @@ async function startNgrok(): Promise<string> {
     let ngrokError = '';
     let hasOldVersionError = false;
     
-    ngrokProcess.stdout?.on('data', (data) => {
+    ngrokProcess.stdout?.on('data', (data: Buffer) => {
       const output = data.toString();
       ngrokOutput += output;
       
@@ -102,7 +102,7 @@ async function startNgrok(): Promise<string> {
       }
     });
     
-    ngrokProcess.stderr?.on('data', (data) => {
+    ngrokProcess.stderr?.on('data', (data: Buffer) => {
       const error = data.toString();
       ngrokError += error;
       
@@ -121,7 +121,7 @@ async function startNgrok(): Promise<string> {
     });
     
     // Check if process exits early
-    ngrokProcess.on('exit', (code) => {
+    ngrokProcess.on('exit', (code: number | null) => {
       if (code !== 0 && code !== null) {
         console.error('   ngrok process exited with code:', code);
         if (hasOldVersionError) {

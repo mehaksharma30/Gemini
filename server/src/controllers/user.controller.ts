@@ -73,7 +73,7 @@ export const getUserPosts = async (req: Request, res: Response) => {
       const postObj = post.toObject();
       return {
         ...postObj,
-        commentCount: countMap.get(post._id.toString()) || 0
+        commentCount: countMap.get((post._id as mongoose.Types.ObjectId).toString()) || 0
       };
     });
 

@@ -27,7 +27,7 @@ export const getEmergencyContacts = async (req: Request, res: Response) => {
     }).select('_id username email');
 
     const userList = users.map(user => ({
-      id: user._id.toString(),
+      id: (user._id as mongoose.Types.ObjectId).toString(),
       username: user.username,
       email: user.email,
     }));
@@ -95,7 +95,7 @@ export const addEmergencyContact = async (req: Request, res: Response) => {
     }).select('_id username email');
 
     const userList = users.map(user => ({
-      id: user._id.toString(),
+      id: (user._id as mongoose.Types.ObjectId).toString(),
       username: user.username,
       email: user.email,
     }));
@@ -148,7 +148,7 @@ export const removeEmergencyContact = async (req: Request, res: Response) => {
     }).select('_id username email');
 
     const userList = users.map(user => ({
-      id: user._id.toString(),
+      id: (user._id as mongoose.Types.ObjectId).toString(),
       username: user.username,
       email: user.email,
     }));

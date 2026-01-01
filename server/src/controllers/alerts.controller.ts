@@ -23,7 +23,7 @@ export const getAlertsInbox = async (req: Request, res: Response) => {
       const incident = alert.incidentId as any;
 
       return {
-        id: alert._id.toString(),
+        id: (alert._id as mongoose.Types.ObjectId).toString(),
         incidentId: incident?._id?.toString() || '',
         fromUserId: fromUser?._id?.toString() || '',
         fromUsername: fromUser?.username || 'Unknown',
@@ -75,7 +75,7 @@ export const acknowledgeAlert = async (req: Request, res: Response) => {
     return res.json({
       success: true,
       data: {
-        id: alert._id.toString(),
+        id: (alert._id as mongoose.Types.ObjectId).toString(),
         status: alert.status,
         incidentId: alert.incidentId.toString(),
         fromUserId: alert.fromUserId.toString(),

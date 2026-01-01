@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
 import { IUser } from '../models/User';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
@@ -11,7 +12,7 @@ export interface JWTPayload {
 
 export const generateToken = (user: IUser): string => {
   const payload: JWTPayload = {
-    userId: user._id.toString(),
+    userId: (user._id as mongoose.Types.ObjectId).toString(),
     username: user.username,
   };
 

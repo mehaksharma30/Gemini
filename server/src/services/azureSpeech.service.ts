@@ -1,7 +1,8 @@
 // Azure Speech SDK - optional import
-let sdk: any = null;
+import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
+let sdk: typeof SpeechSDK | null = null;
 try {
-  sdk = require('microsoft-cognitiveservices-speech-sdk');
+  sdk = SpeechSDK;
 } catch (error) {
   console.warn('[Azure Speech] SDK not installed. Voice features will be disabled.');
   console.warn('[Azure Speech] Install with: npm install microsoft-cognitiveservices-speech-sdk');
@@ -19,7 +20,7 @@ export interface AzureSpeechConfig {
   voiceName?: string;
 }
 
-let speechConfig: sdk.SpeechConfig | null = null;
+let speechConfig: SpeechSDK.SpeechConfig | null = null;
 
 /**
  * Initialize Azure Speech configuration
@@ -39,6 +40,10 @@ export function initializeAzureSpeech(): void {
   }
 
   try {
+    if (!sdk) {
+      console.warn('[Azure Speech] SDK not available. Voice features will be disabled.');
+      return;
+    }
     speechConfig = sdk.SpeechConfig.fromSubscription(subscriptionKey, region);
     speechConfig.speechRecognitionLanguage = process.env.AZURE_SPEECH_LANGUAGE || 'en-US';
     speechConfig.speechSynthesisVoiceName = process.env.AZURE_SPEECH_VOICE || 'en-US-JennyNeural';
@@ -63,14 +68,14 @@ export function isAzureSpeechAvailable(): boolean {
 /**
  * Get Azure Speech configuration
  */
-export function getSpeechConfig(): sdk.SpeechConfig | null {
+export function getSpeechConfig(): SpeechSDK.SpeechConfig | null {
   return speechConfig;
 }
 
 /**
  * Create a push audio input stream for real-time STT
  */
-export function createPushAudioInputStream(): any {
+export function createPushAudioInputStream(): SpeechSDK.PushAudioInputStream {
   if (!sdk) throw new Error('Azure Speech SDK not installed');
   const format = sdk.AudioStreamFormat.getWaveFormatPCM(16000, 16, 1);
   return sdk.AudioInputStream.createPushStream(format);
@@ -79,7 +84,7 @@ export function createPushAudioInputStream(): any {
 /**
  * Create a pull audio output stream for real-time TTS
  */
-export function createPullAudioOutputStream(): any {
+export function createPullAudioOutputStream(): SpeechSDK.PullAudioOutputStream {
   if (!sdk) throw new Error('Azure Speech SDK not installed');
   return sdk.AudioOutputStream.createPullStream();
 }
@@ -94,12 +99,16 @@ export async function textToSpeech(text: string): Promise<ArrayBuffer> {
   }
 
   return new Promise((resolve, reject) => {
-    const synthesizer = new sdk.SpeechSynthesizer(speechConfig!, null);
+    if (!sdk || !speechConfig) {
+      reject(new Error('Azure Speech not initialized'));
+      return;
+    }
+    const synthesizer = new sdk.SpeechSynthesizer(speechConfig, null);
     
     synthesizer.speakTextAsync(
       text,
-      (result) => {
-        if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) {
+      (result: SpeechSDK.SpeechSynthesisResult) => {
+        if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
           const audioData = result.audioData;
           synthesizer.close();
           resolve(audioData);
@@ -108,7 +117,7 @@ export async function textToSpeech(text: string): Promise<ArrayBuffer> {
           reject(new Error(`TTS failed: ${result.reason}`));
         }
       },
-      (error) => {
+      (error: Error) => {
         synthesizer.close();
         reject(error);
       }
@@ -130,26 +139,29 @@ export function textToSpeechStream(text: string): NodeJS.ReadableStream {
     read() {}
   });
 
-  const synthesizer = new sdk.SpeechSynthesizer(speechConfig!, null);
+  if (!sdk || !speechConfig) {
+    throw new Error('Azure Speech not initialized');
+  }
+  const synthesizer = new sdk.SpeechSynthesizer(speechConfig, null);
   
-  synthesizer.speakTextAsync(
-    text,
-    (result) => {
-      if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) {
-        const audioData = result.audioData;
-        audioStream.push(Buffer.from(audioData));
-        audioStream.push(null); // End stream
-        synthesizer.close();
-      } else {
-        audioStream.destroy(new Error(`TTS failed: ${result.reason}`));
+    synthesizer.speakTextAsync(
+      text,
+      (result: SpeechSDK.SpeechSynthesisResult) => {
+        if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
+          const audioData = result.audioData;
+          audioStream.push(Buffer.from(audioData));
+          audioStream.push(null); // End stream
+          synthesizer.close();
+        } else {
+          audioStream.destroy(new Error(`TTS failed: ${result.reason}`));
+          synthesizer.close();
+        }
+      },
+      (error: Error) => {
+        audioStream.destroy(error);
         synthesizer.close();
       }
-    },
-    (error) => {
-      audioStream.destroy(error);
-      synthesizer.close();
-    }
-  );
+    );
 
   return audioStream;
 }
@@ -173,13 +185,17 @@ export async function speechToText(audioBuffer: ArrayBuffer): Promise<string> {
   }
 
   return new Promise((resolve, reject) => {
+    if (!sdk || !speechConfig) {
+      reject(new Error('Azure Speech not initialized'));
+      return;
+    }
     const audioConfig = sdk.AudioConfig.fromStreamInput(
       sdk.AudioInputStream.createPushStream(
         sdk.AudioStreamFormat.getWaveFormatPCM(16000, 16, 1)
       )
     );
     
-    const recognizer = new sdk.SpeechRecognizer(speechConfig!, audioConfig);
+    const recognizer = new sdk.SpeechRecognizer(speechConfig, audioConfig);
     
     // Push audio data
     const pushStream = audioConfig as any;
@@ -189,15 +205,15 @@ export async function speechToText(audioBuffer: ArrayBuffer): Promise<string> {
     }
 
     recognizer.recognizeOnceAsync(
-      (result) => {
+      (result: SpeechSDK.SpeechRecognitionResult) => {
         recognizer.close();
-        if (result.reason === sdk.ResultReason.RecognizedSpeech) {
+        if (result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
           resolve(result.text);
         } else {
           reject(new Error(`STT failed: ${result.reason}`));
         }
       },
-      (error) => {
+      (error: Error) => {
         recognizer.close();
         reject(error);
       }

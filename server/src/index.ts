@@ -54,7 +54,7 @@ if (process.env.FRONTEND_URL) {
   }
 }
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // CORS configuration
 const corsOptions = {

@@ -1,7 +1,8 @@
 // Azure Speech SDK - optional import
-let sdk: any = null;
+import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
+let sdk: typeof SpeechSDK | null = null;
 try {
-  sdk = require('microsoft-cognitiveservices-speech-sdk');
+  sdk = SpeechSDK;
 } catch (error) {
   console.warn('[Azure TTS] SDK not installed. TTS features will be disabled.');
 }
@@ -38,6 +39,10 @@ export async function synthesizeToMp3(text: string, lang?: string): Promise<Buff
 
   console.log(`[Azure TTS] Starting synthesis - Text length: ${text.length}, Voice: ${voiceName}, Lang: ${lang || 'en'}`);
 
+  if (!sdk) {
+    throw new Error('Azure Speech SDK not installed');
+  }
+
   // Create speech config
   const speechConfig = sdk.SpeechConfig.fromSubscription(subscriptionKey, region);
   speechConfig.speechSynthesisVoiceName = voiceName;
@@ -51,7 +56,7 @@ export async function synthesizeToMp3(text: string, lang?: string): Promise<Buff
 
     synthesizer.speakTextAsync(
       text,
-      (result) => {
+      (result: any) => {
         synthesizer.close();
         
         if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) {
@@ -75,7 +80,7 @@ export async function synthesizeToMp3(text: string, lang?: string): Promise<Buff
           reject(new Error(`TTS failed: ${result.reason}`));
         }
       },
-      (error) => {
+      (error: Error) => {
         synthesizer.close();
         console.error('[Azure TTS] Synthesis error:', error);
         reject(error);

@@ -5,17 +5,18 @@ import Post from '../models/Post';
 import mongoose from 'mongoose';
 
 // Azure Speech SDK - optional import
-let sdk: any = null;
+import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
+let sdk: typeof SpeechSDK | null = null;
 try {
-  sdk = require('microsoft-cognitiveservices-speech-sdk');
+  sdk = SpeechSDK;
 } catch (error) {
   // SDK not installed - voice features will be disabled
 }
 
 interface VoiceChatSession {
   userId: string;
-  recognizer: sdk.SpeechRecognizer | null;
-  audioInputStream: sdk.PushAudioInputStream | null;
+  recognizer: SpeechSDK.SpeechRecognizer | null;
+  audioInputStream: SpeechSDK.PushAudioInputStream | null;
   conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
   userPosts: Array<{ title: string; content: string; tags: string[]; createdAt: Date }>;
 }
@@ -64,6 +65,11 @@ export function setupVoiceChatSocket(io: Server): void {
           }));
         } catch (err) {
           console.error('[Voice Chat] Error fetching user posts:', err);
+        }
+
+        if (!sdk) {
+          socket.emit('voice:error', { message: 'Azure Speech SDK not available' });
+          return;
         }
 
         // Create audio input stream for STT
@@ -140,7 +146,7 @@ export function setupVoiceChatSocket(io: Server): void {
         };
 
         // Handle interim recognition results (real-time transcription)
-        recognizer.recognizing = (s, e) => {
+        recognizer.recognizing = (s: SpeechSDK.SpeechRecognizer, e: SpeechSDK.SpeechRecognitionEventArgs) => {
           if (e.result && e.result.text) {
             currentInterimText = e.result.text;
             console.log('[Voice Chat] Interim text:', e.result.text);
@@ -155,7 +161,7 @@ export function setupVoiceChatSocket(io: Server): void {
         };
 
         // Handle speech end detection (user stopped speaking)
-        recognizer.speechEndDetected = (s, e) => {
+        recognizer.speechEndDetected = (s: SpeechSDK.SpeechRecognizer, e: SpeechSDK.SessionEventArgs) => {
           console.log('[Voice Chat] Speech end detected');
           // Start silence timer - if no more speech in 1.5s, auto-send
           if (silenceTimer) {
@@ -170,8 +176,8 @@ export function setupVoiceChatSocket(io: Server): void {
         };
 
         // Handle final recognition results
-        recognizer.recognized = async (s, e) => {
-          if (e.result.reason === sdk.ResultReason.RecognizedSpeech && e.result.text) {
+        recognizer.recognized = async (s: SpeechSDK.SpeechRecognizer, e: SpeechSDK.SpeechRecognitionEventArgs) => {
+          if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech && e.result.text) {
             const userText = e.result.text.trim();
             if (!userText) return;
 
@@ -186,7 +192,7 @@ export function setupVoiceChatSocket(io: Server): void {
           }
         };
 
-        recognizer.canceled = (s, e) => {
+        recognizer.canceled = (s: SpeechSDK.SpeechRecognizer, e: SpeechSDK.SpeechRecognitionCanceledEventArgs) => {
           console.log('[Voice Chat] Recognition canceled:', e.errorDetails);
           if (silenceTimer) {
             clearTimeout(silenceTimer);
@@ -195,7 +201,7 @@ export function setupVoiceChatSocket(io: Server): void {
           socket.emit('voice:error', { message: e.errorDetails });
         };
 
-        recognizer.sessionStopped = (s, e) => {
+        recognizer.sessionStopped = (s: SpeechSDK.SpeechRecognizer, e: SpeechSDK.SessionEventArgs) => {
           console.log('[Voice Chat] Session stopped');
           if (silenceTimer) {
             clearTimeout(silenceTimer);
@@ -209,7 +215,7 @@ export function setupVoiceChatSocket(io: Server): void {
             console.log('[Voice Chat] Continuous recognition started for:', socket.id);
             socket.emit('voice:ready', { message: 'Voice chat ready' });
           },
-          (error) => {
+          (error: Error) => {
             console.error('[Voice Chat] Failed to start recognition:', error);
             socket.emit('voice:error', { message: 'Failed to start voice recognition' });
           }
@@ -252,7 +258,7 @@ export function setupVoiceChatSocket(io: Server): void {
             () => {
               session.recognizer?.close();
             },
-            (error) => {
+            (error: Error) => {
               console.error('[Voice Chat] Error stopping recognition:', error);
             }
           );
