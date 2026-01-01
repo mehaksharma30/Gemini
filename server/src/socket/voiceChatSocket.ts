@@ -146,7 +146,7 @@ export function setupVoiceChatSocket(io: Server): void {
         };
 
         // Handle interim recognition results (real-time transcription)
-        recognizer.recognizing = (s: SpeechSDK.SpeechRecognizer, e: SpeechSDK.SpeechRecognitionEventArgs) => {
+        recognizer.recognizing = (s: SpeechSDK.Recognizer, e: SpeechSDK.SpeechRecognitionEventArgs) => {
           if (e.result && e.result.text) {
             currentInterimText = e.result.text;
             console.log('[Voice Chat] Interim text:', e.result.text);
@@ -161,7 +161,7 @@ export function setupVoiceChatSocket(io: Server): void {
         };
 
         // Handle speech end detection (user stopped speaking)
-        recognizer.speechEndDetected = (s: SpeechSDK.SpeechRecognizer, e: SpeechSDK.SessionEventArgs) => {
+        recognizer.speechEndDetected = (s: SpeechSDK.Recognizer, e: SpeechSDK.RecognitionEventArgs) => {
           console.log('[Voice Chat] Speech end detected');
           // Start silence timer - if no more speech in 1.5s, auto-send
           if (silenceTimer) {
@@ -176,7 +176,7 @@ export function setupVoiceChatSocket(io: Server): void {
         };
 
         // Handle final recognition results
-        recognizer.recognized = async (s: SpeechSDK.SpeechRecognizer, e: SpeechSDK.SpeechRecognitionEventArgs) => {
+        recognizer.recognized = (s: SpeechSDK.Recognizer, e: SpeechSDK.SpeechRecognitionEventArgs) => {
           if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech && e.result.text) {
             const userText = e.result.text.trim();
             if (!userText) return;
@@ -188,11 +188,13 @@ export function setupVoiceChatSocket(io: Server): void {
             }
             currentInterimText = '';
 
-            await processFinalText(userText);
+            processFinalText(userText).catch((err) => {
+              console.error('[Voice Chat] Error processing final text:', err);
+            });
           }
         };
 
-        recognizer.canceled = (s: SpeechSDK.SpeechRecognizer, e: SpeechSDK.SpeechRecognitionCanceledEventArgs) => {
+        recognizer.canceled = (s: SpeechSDK.Recognizer, e: SpeechSDK.SpeechRecognitionCanceledEventArgs) => {
           console.log('[Voice Chat] Recognition canceled:', e.errorDetails);
           if (silenceTimer) {
             clearTimeout(silenceTimer);
@@ -201,7 +203,7 @@ export function setupVoiceChatSocket(io: Server): void {
           socket.emit('voice:error', { message: e.errorDetails });
         };
 
-        recognizer.sessionStopped = (s: SpeechSDK.SpeechRecognizer, e: SpeechSDK.SessionEventArgs) => {
+        recognizer.sessionStopped = (s: SpeechSDK.Recognizer, e: SpeechSDK.SessionEventArgs) => {
           console.log('[Voice Chat] Session stopped');
           if (silenceTimer) {
             clearTimeout(silenceTimer);
@@ -215,7 +217,7 @@ export function setupVoiceChatSocket(io: Server): void {
             console.log('[Voice Chat] Continuous recognition started for:', socket.id);
             socket.emit('voice:ready', { message: 'Voice chat ready' });
           },
-          (error: Error) => {
+          (error: string) => {
             console.error('[Voice Chat] Failed to start recognition:', error);
             socket.emit('voice:error', { message: 'Failed to start voice recognition' });
           }
@@ -234,7 +236,11 @@ export function setupVoiceChatSocket(io: Server): void {
       if (session && session.audioInputStream) {
         try {
           const audioBuffer = Buffer.from(data.audio, 'base64');
-          session.audioInputStream.write(audioBuffer);
+          // Convert Buffer to ArrayBuffer for Azure SDK
+          const arrayBuffer = new ArrayBuffer(audioBuffer.length);
+          const view = new Uint8Array(arrayBuffer);
+          view.set(audioBuffer);
+          session.audioInputStream.write(arrayBuffer);
           audioChunkCount++;
           
           // Log first few chunks and then occasionally
@@ -258,7 +264,7 @@ export function setupVoiceChatSocket(io: Server): void {
             () => {
               session.recognizer?.close();
             },
-            (error: Error) => {
+            (error: string) => {
               console.error('[Voice Chat] Error stopping recognition:', error);
             }
           );

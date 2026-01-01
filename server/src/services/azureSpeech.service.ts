@@ -117,9 +117,9 @@ export async function textToSpeech(text: string): Promise<ArrayBuffer> {
           reject(new Error(`TTS failed: ${result.reason}`));
         }
       },
-      (error: Error) => {
+      (error: string) => {
         synthesizer.close();
-        reject(error);
+        reject(new Error(error));
       }
     );
   });

@@ -100,7 +100,7 @@ export const triggerPanic = async (req: Request, res: Response) => {
           toEmail: receiverUser.email,
           senderUsername: senderUser?.username || 'Someone',
           senderUserId: userId,
-          incidentId: incident._id.toString(),
+          incidentId: (incident._id as mongoose.Types.ObjectId).toString(),
         });
 
         emailSent = emailResult.success;
@@ -173,7 +173,7 @@ export const triggerPanic = async (req: Request, res: Response) => {
             toEmail: receiverUser.email,
             senderUsername,
             senderUserId: userId,
-            incidentId: incident._id.toString(),
+            incidentId: (incident._id as mongoose.Types.ObjectId).toString(),
           });
 
           if (emailResult.success) {

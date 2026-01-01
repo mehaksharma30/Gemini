@@ -80,10 +80,10 @@ export async function synthesizeToMp3(text: string, lang?: string): Promise<Buff
           reject(new Error(`TTS failed: ${result.reason}`));
         }
       },
-      (error: Error) => {
+      (error: string) => {
         synthesizer.close();
         console.error('[Azure TTS] Synthesis error:', error);
-        reject(error);
+        reject(new Error(error));
       }
     );
   });
