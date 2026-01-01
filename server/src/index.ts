@@ -35,35 +35,59 @@ const app = express();
 const httpServer = createServer(app);
 
 // Allowed origins for CORS (both local dev and production)
-const allowedOrigins = [
-  'http://localhost:4200',
-  'https://purple-moss-01574bd1e.4.azurestaticapps.net',
-  process.env.FRONTEND_URL,
-].filter(Boolean); // Remove undefined values
+const allowedOrigins: string[] = [
+  'http://localhost:4200', // Always allow localhost for development
+];
 
-const io = new Server(httpServer, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    credentials: true,
-  },
-});
+// Parse FRONTEND_ORIGINS environment variable (comma-separated list)
+if (process.env.FRONTEND_ORIGINS) {
+  const envOrigins = process.env.FRONTEND_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean);
+  allowedOrigins.push(...envOrigins);
+}
+
+// Also support legacy FRONTEND_URL for backward compatibility
+if (process.env.FRONTEND_URL) {
+  const legacyUrl = process.env.FRONTEND_URL.trim();
+  if (!allowedOrigins.includes(legacyUrl)) {
+    allowedOrigins.push(legacyUrl);
+  }
+}
 
 const PORT = process.env.PORT || 3000;
 
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
+// CORS configuration
+const corsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    // Allow requests with no origin (like mobile apps, curl, Postman)
+    if (!origin) {
+      return callback(null, true);
+    }
     
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      console.warn(`CORS blocked origin: ${origin}. Allowed origins: ${allowedOrigins.join(', ')}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
-}));
+  optionsSuccessStatus: 200, // Some legacy browsers (IE11) choke on 204
+};
+
+// Apply CORS middleware
+app.use(cors(corsOptions));
+
+// Socket.IO CORS configuration
+const io = new Server(httpServer, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+  },
+});
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
