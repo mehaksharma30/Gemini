@@ -26,7 +26,7 @@ export interface PanicChatResponse {
   providedIn: 'root',
 })
 export class AIPanicService {
-  private apiUrl = `${environment.apiBaseUrl}/api/ai`;
+  private apiUrl = `${environment.apiUrl}/ai`;
 
   constructor(private http: HttpClient) {}
 

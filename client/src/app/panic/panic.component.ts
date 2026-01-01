@@ -1412,7 +1412,7 @@ export class PanicComponent implements OnInit, OnDestroy {
 
     console.log('[Panic] Requesting initial AI message:', {
       payload,
-      endpoint: `${environment.apiBaseUrl}/api/ai/panic-chat`,
+      endpoint: `${environment.apiUrl}/ai/panic-chat`,
     });
 
     this.aiPanicService.sendMessage(payload).subscribe({
@@ -1450,7 +1450,7 @@ export class PanicComponent implements OnInit, OnDestroy {
           statusText: err.statusText || 'unknown',
           error: err.error || err.message,
           errorBody: err.error ? JSON.stringify(err.error, null, 2) : 'none',
-          url: err.url || `${environment.apiBaseUrl}/api/ai/panic-chat`,
+          url: err.url || `${environment.apiUrl}/ai/panic-chat`,
         };
         
         console.error('[Panic] Initial message request failed:', errorDetails);
@@ -1495,7 +1495,7 @@ export class PanicComponent implements OnInit, OnDestroy {
       message: userMessage.substring(0, 50) + (userMessage.length > 50 ? '...' : ''),
       historyLength: payload.history.length,
       conversationId: payload.conversationId || 'none',
-      endpoint: `${environment.apiBaseUrl}/api/ai/panic-chat`,
+      endpoint: `${environment.apiUrl}/ai/panic-chat`,
     });
 
     this.aiPanicService.sendMessage(payload).subscribe({
@@ -1541,7 +1541,7 @@ export class PanicComponent implements OnInit, OnDestroy {
           statusText: err.statusText || 'unknown',
           error: err.error || err.message,
           errorBody: err.error ? JSON.stringify(err.error, null, 2) : 'none',
-          url: err.url || `${environment.apiBaseUrl}/api/ai/panic-chat`,
+          url: err.url || `${environment.apiUrl}/ai/panic-chat`,
         };
         
         console.error('[Panic] Message send failed:', errorDetails);
@@ -1742,7 +1742,7 @@ export class PanicComponent implements OnInit, OnDestroy {
       console.log('[Panic] Using English voice (always)');
 
       // Call TTS endpoint
-      const apiUrl = `${environment.apiBaseUrl}/api/ai/tts`;
+      const apiUrl = `${environment.apiUrl}/ai/tts`;
       const authToken = this.authService.getToken();
       
       if (!authToken) {
@@ -2002,7 +2002,7 @@ export class PanicComponent implements OnInit, OnDestroy {
       console.log('[Panic] Using English voice (always)');
 
       // Call TTS endpoint
-      const apiUrl = `${environment.apiBaseUrl}/api/ai/tts`;
+      const apiUrl = `${environment.apiUrl}/ai/tts`;
       const authToken = this.authService.getToken();
       
       if (!authToken) {

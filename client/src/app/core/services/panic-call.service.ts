@@ -29,7 +29,7 @@ import { environment } from '../../../environments/environment';
 })
 export class PanicCallService {
   private http = inject(HttpClient);
-  private apiUrl = environment.apiBaseUrl;
+  private apiUrl = environment.apiUrl;
   
   private client: WebPubSubClient | null = null;
   private userId: string = '';
@@ -54,7 +54,7 @@ export class PanicCallService {
       
       // Get client access URL from backend
       const response = await this.http.get<{ success: boolean; url: string; userId: string }>(
-        `${this.apiUrl}/api/webpubsub/negotiate`
+        `${this.apiUrl}/webpubsub/negotiate`
       ).toPromise();
       
       if (!response || !response.success || !response.url) {

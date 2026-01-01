@@ -13,7 +13,7 @@ import { environment } from '../../../environments/environment';
   providedIn: 'root',
 })
 export class DMService {
-  private apiUrl = `${environment.apiBaseUrl}/api/dm`;
+  private apiUrl = `${environment.apiUrl}/dm`;
 
   constructor(private http: HttpClient) {}
 

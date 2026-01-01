@@ -8,7 +8,7 @@ import { environment } from '../../../environments/environment';
   providedIn: 'root',
 })
 export class PostService {
-  private apiUrl = `${environment.apiBaseUrl}/api/posts`;
+  private apiUrl = `${environment.apiUrl}/posts`;
 
   constructor(private http: HttpClient) {}
 
@@ -54,7 +54,7 @@ export class PostService {
     formData.append('image', file);
 
     return this.http.post<{ success: boolean; imageUrl: string; message?: string }>(
-      `${environment.apiBaseUrl}/api/uploads/post-image`,
+      `${environment.apiUrl}/uploads/post-image`,
       formData
     );
   }

@@ -41,7 +41,7 @@ export class WebPubSubService {
    * Get Web PubSub client access token from backend
    */
   private getToken(targetUserId?: string): Observable<WebPubSubTokenResponse> {
-    const url = `${environment.apiBaseUrl}/api/webpubsub/token`;
+    const url = `${environment.apiUrl}/webpubsub/token`;
     return this.http.post<WebPubSubTokenResponse>(url, { targetUserId });
   }
 

@@ -37,6 +37,7 @@ const httpServer = createServer(app);
 // Allowed origins for CORS (both local dev and production)
 const allowedOrigins: string[] = [
   'http://localhost:4200', // Always allow localhost for development
+  'https://purple-moss-01574bd1e.4.azurestaticapps.net', // Production frontend
 ];
 
 // Parse FRONTEND_ORIGINS environment variable (comma-separated list)
@@ -116,7 +117,7 @@ app.get('/api/health', (req, res) => {
 setupDMSocket(io);
 setupVoiceChatSocket(io);
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
 

@@ -7,7 +7,7 @@ import { environment } from '../../../environments/environment';
   providedIn: 'root',
 })
 export class SpeechToTextService {
-  private apiUrl = environment.apiBaseUrl;
+  private apiUrl = environment.apiUrl;
 
   constructor(
     private authService: AuthService
@@ -25,7 +25,7 @@ export class SpeechToTextService {
         throw new Error('Not authenticated. Please log in first.');
       }
 
-      const url = `${this.apiUrl}/api/ai/speech/token`;
+      const url = `${this.apiUrl}/ai/speech/token`;
       console.log('[STT] Fetching token from:', url);
       
       const response = await fetch(url, {

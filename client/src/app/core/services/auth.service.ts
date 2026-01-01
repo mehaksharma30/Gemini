@@ -9,7 +9,7 @@ import { environment } from '../../../environments/environment';
   providedIn: 'root',
 })
 export class AuthService {
-  private apiUrl = `${environment.apiBaseUrl}/api/auth`;
+  private apiUrl = `${environment.apiUrl}/auth`;
   private tokenKey = 'mindmemos_token';
   private currentUserSubject = new BehaviorSubject<User | null>(null);
   public currentUser$ = this.currentUserSubject.asObservable();
