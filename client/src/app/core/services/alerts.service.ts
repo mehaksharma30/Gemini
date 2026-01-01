@@ -34,7 +34,7 @@ export interface AcknowledgeAlertResponse {
   providedIn: 'root',
 })
 export class AlertsService {
-  private apiUrl = `${environment.apiUrl}/alerts`;
+  private apiUrl = `${environment.apiBaseUrl}/api/alerts`;
 
   constructor(private http: HttpClient) {}
 

@@ -19,7 +19,7 @@ export interface EmergencyContactsResponse {
   providedIn: 'root',
 })
 export class EmergencyService {
-  private apiUrl = `${environment.apiUrl}/emergency`;
+  private apiUrl = `${environment.apiBaseUrl}/api/emergency`;
 
   constructor(private http: HttpClient) {}
 

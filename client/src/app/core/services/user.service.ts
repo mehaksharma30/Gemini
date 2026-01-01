@@ -20,7 +20,7 @@ export interface UserProfile {
   providedIn: 'root',
 })
 export class UserService {
-  private apiUrl = `${environment.apiUrl}/users`;
+  private apiUrl = `${environment.apiBaseUrl}/api/users`;
 
   constructor(private http: HttpClient) {}
 

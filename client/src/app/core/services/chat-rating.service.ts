@@ -19,7 +19,7 @@ export interface RatingResponse {
   providedIn: 'root',
 })
 export class ChatRatingService {
-  private apiUrl = `${environment.apiUrl}/chat/ratings`;
+  private apiUrl = `${environment.apiBaseUrl}/api/chat/ratings`;
 
   constructor(private http: HttpClient) {}
 

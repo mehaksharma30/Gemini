@@ -2,7 +2,7 @@
 // Default to localhost for local development
 export const environment = {
   production: false,
-  apiUrl: 'http://localhost:3000/api',
+  apiBaseUrl: 'http://localhost:3000',
   ngrokUrl: '', // Will be set by ngrok script if running
   // Azure Speech Service credentials
   // Set these in your local .env or environment

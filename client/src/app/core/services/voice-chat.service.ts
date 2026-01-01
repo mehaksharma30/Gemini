@@ -13,7 +13,7 @@ export interface VoiceChatResult {
   providedIn: 'root',
 })
 export class VoiceChatService {
-  private apiUrl = environment.apiUrl;
+  private apiUrl = environment.apiBaseUrl;
 
   constructor(
     private aiPanicService: AIPanicService,
@@ -33,7 +33,7 @@ export class VoiceChatService {
         throw new Error('Not authenticated. Please log in first.');
       }
 
-      const url = `${this.apiUrl}/ai/speech/token`;
+      const url = `${this.apiUrl}/api/ai/speech/token`;
       console.log('[Voice Chat] Fetching token from:', url);
       console.log('[Voice Chat] Auth token present:', !!authToken);
       

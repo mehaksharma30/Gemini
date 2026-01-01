@@ -32,7 +32,7 @@ export interface SearchResponse {
   providedIn: 'root',
 })
 export class SearchService {
-  private apiUrl = `${environment.apiUrl}/search`;
+  private apiUrl = `${environment.apiBaseUrl}/api/search`;
 
   constructor(private http: HttpClient) {}
 

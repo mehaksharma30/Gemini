@@ -24,7 +24,7 @@ export interface AIResponse {
   providedIn: 'root',
 })
 export class AIChatService {
-  private apiUrl = `${environment.apiUrl}/ai`;
+  private apiUrl = `${environment.apiBaseUrl}/api/ai`;
 
   constructor(private http: HttpClient) {}
 

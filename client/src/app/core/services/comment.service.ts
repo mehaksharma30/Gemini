@@ -8,7 +8,7 @@ import { environment } from '../../../environments/environment';
   providedIn: 'root',
 })
 export class CommentService {
-  private apiUrl = `${environment.apiUrl}/comments`;
+  private apiUrl = `${environment.apiBaseUrl}/api/comments`;
 
   constructor(private http: HttpClient) {}
 

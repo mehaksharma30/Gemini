@@ -28,8 +28,8 @@ export class ChatSocketService {
       return;
     }
 
-    // Extract base URL from environment.apiUrl (remove /api if present)
-    const baseUrl = environment.apiUrl.replace(/\/api\/?$/, '');
+    // Use apiBaseUrl directly (already doesn't include /api)
+    const baseUrl = environment.apiBaseUrl;
     this.socket = io(baseUrl, {
       auth: {
         token,
