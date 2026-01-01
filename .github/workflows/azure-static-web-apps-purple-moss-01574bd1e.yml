@@ -34,10 +34,43 @@ jobs:
 
       - name: Show build output
         run: |
-          echo "== client/dist =="
+          echo "== client/dist structure =="
           ls -la client/dist || true
-          echo "== find index.html =="
-          find client/dist -name index.html -maxdepth 6 || true
+          echo "== client/dist/client structure =="
+          ls -la client/dist/client || true
+          echo "== client/dist/client/browser structure =="
+          ls -la client/dist/client/browser || true
+          echo "== Finding index.html =="
+          find client/dist -name index.html -type f || true
+          echo "== Checking if dist/client/browser exists =="
+          if [ -d "client/dist/client/browser" ]; then
+            echo "✓ dist/client/browser exists"
+            ls -la client/dist/client/browser/ | head -10
+          else
+            echo "✗ dist/client/browser does not exist"
+          fi
+          echo "== Checking if dist/client exists =="
+          if [ -d "client/dist/client" ]; then
+            echo "✓ dist/client exists"
+            ls -la client/dist/client/ | head -10
+          else
+            echo "✗ dist/client does not exist"
+          fi
+
+      - name: Determine output location
+        id: set-output
+        run: |
+          if [ -f "client/dist/client/browser/index.html" ]; then
+            echo "output_path=dist/client/browser" >> $GITHUB_OUTPUT
+            echo "Found index.html at dist/client/browser"
+          elif [ -f "client/dist/client/index.html" ]; then
+            echo "output_path=dist/client" >> $GITHUB_OUTPUT
+            echo "Found index.html at dist/client"
+          else
+            echo "ERROR: Could not find index.html in expected locations"
+            find client/dist -name index.html || true
+            exit 1
+          fi
 
       - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
@@ -45,9 +78,9 @@ jobs:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_PURPLE_MOSS_01574BD1E }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: "upload"
-          app_location: "client"
+          app_location: "./client"
           api_location: ""
-          output_location: "dist/client/browser"
+          output_location: ${{ steps.set-output.outputs.output_path }}
           skip_app_build: true
 
   close_pull_request_job:
