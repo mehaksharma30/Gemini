@@ -37,7 +37,7 @@ const httpServer = createServer(app);
 // Allowed origins for CORS (both local dev and production)
 const allowedOrigins = [
   'http://localhost:4200',
-  'https://victorious-sky-0ba163b1e.4.azurestaticapps.net',
+  'https://purple-moss-01574bd1e.4.azurestaticapps.net',
   process.env.FRONTEND_URL,
 ].filter(Boolean); // Remove undefined values
 
