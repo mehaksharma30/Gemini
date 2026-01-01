@@ -157,8 +157,8 @@ export function textToSpeechStream(text: string): NodeJS.ReadableStream {
           synthesizer.close();
         }
       },
-      (error: Error) => {
-        audioStream.destroy(error);
+      (error: string) => {
+        audioStream.destroy(new Error(error));
         synthesizer.close();
       }
     );
@@ -213,9 +213,9 @@ export async function speechToText(audioBuffer: ArrayBuffer): Promise<string> {
           reject(new Error(`STT failed: ${result.reason}`));
         }
       },
-      (error: Error) => {
+      (error: string) => {
         recognizer.close();
-        reject(error);
+        reject(new Error(error));
       }
     );
   });
