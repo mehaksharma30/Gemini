@@ -47,6 +47,11 @@ coverage/
 server/uploads/
 client/uploads/
 
+# Temporary files directory
+server/tmp/
+client/tmp/
+tmp/
+
 # Environment files (additional patterns)
 *.env.*
 !.env.example
