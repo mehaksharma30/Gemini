@@ -23,7 +23,8 @@ export class VoiceChatComponent implements OnInit, OnDestroy {
     isRecording: false,
     isPlaying: false,
     isMuted: false,
-    volume: 1.0
+    volume: 1.0,
+    isConnected: false
   };
 
   targetUserId: string = '';

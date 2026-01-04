@@ -512,6 +512,7 @@ export class AudioCommunicationService {
         isPlaying: false,
         isMuted: false,
         volume: 1.0,
+        isConnected: false,
       };
       this.stateSubject.next({ ...this.currentState });
 
