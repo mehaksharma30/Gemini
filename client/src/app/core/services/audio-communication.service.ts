@@ -1,6 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { Subject, Observable } from 'rxjs';
 import { WebPubSubService, AudioMessage } from './web-pubsub.service';
+import { AuthService } from './auth.service';
 
 export interface AudioStreamState {
   isRecording: boolean;
@@ -14,6 +15,7 @@ export interface AudioStreamState {
 })
 export class AudioCommunicationService {
   private webPubSubService = inject(WebPubSubService);
+  private authService = inject(AuthService);
   
   private mediaStream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
@@ -61,15 +63,51 @@ export class AudioCommunicationService {
     try {
       // Create group ID (sorted to ensure consistency)
       this.groupId = [userId, targetUserId].sort().join('-');
+      console.log('[Audio Communication] Initializing for group:', this.groupId);
 
       // Connect to Web PubSub
       await this.webPubSubService.connect(targetUserId);
+      
+      // Wait for connection to be established
+      let connected = false;
+      const connectionCheck = setInterval(() => {
+        if (this.webPubSubService.isConnected()) {
+          connected = true;
+          clearInterval(connectionCheck);
+        }
+      }, 100);
+
+      // Wait up to 5 seconds for connection
+      let attempts = 0;
+      while (!connected && attempts < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
+
+      if (!connected) {
+        throw new Error('Failed to establish Web PubSub connection');
+      }
+
+      // Ensure we're in the group
+      const currentUser = this.authService?.currentUser();
+      if (currentUser && currentUser.id) {
+        // Group should already be joined via token, but ensure it
+        console.log('[Audio Communication] Connection established, group:', this.groupId);
+      }
 
       // Initialize audio context
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       this.remoteAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
 
-      console.log('[Audio Communication] Initialized for group:', this.groupId);
+      // Resume audio context if suspended (required by some browsers)
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+      }
+      if (this.remoteAudioContext.state === 'suspended') {
+        await this.remoteAudioContext.resume();
+      }
+
+      console.log('[Audio Communication] Initialized successfully for group:', this.groupId);
     } catch (error: any) {
       console.error('[Audio Communication] Initialization error:', error);
       this.errorSubject.next(error.message || 'Failed to initialize audio communication');
@@ -186,55 +224,111 @@ export class AudioCommunicationService {
     }
   }
 
+  private audioQueue: ArrayBuffer[] = [];
+  private isProcessingQueue = false;
+  private currentSource: AudioBufferSourceNode | null = null;
+
   /**
    * Handle remote audio data (PCM format)
    */
   private async handleRemoteAudio(message: AudioMessage): Promise<void> {
     try {
       if (!message.data || !this.remoteAudioContext) {
+        console.warn('[Audio Communication] Missing data or context');
         return;
       }
 
-      // Convert Int16Array PCM to Float32Array for Web Audio API
-      const pcmData = new Int16Array(message.data);
-      const floatData = new Float32Array(pcmData.length);
+      // Add to queue for smooth playback
+      this.audioQueue.push(message.data);
       
-      // Convert 16-bit PCM to float32 (-1.0 to 1.0)
-      for (let i = 0; i < pcmData.length; i++) {
-        floatData[i] = pcmData[i] / (pcmData[i] < 0 ? 0x8000 : 0x7FFF);
+      // Process queue if not already processing
+      if (!this.isProcessingQueue) {
+        this.processAudioQueue();
       }
-
-      // Create audio buffer (16kHz, mono)
-      const sampleRate = 16000;
-      const audioBuffer = this.remoteAudioContext.createBuffer(1, floatData.length, sampleRate);
-      audioBuffer.copyToChannel(floatData, 0);
-
-      // Create source and play
-      const source = this.remoteAudioContext.createBufferSource();
-      const gainNode = this.remoteAudioContext.createGain();
-      
-      source.buffer = audioBuffer;
-      gainNode.gain.value = this.currentState.volume;
-      
-      source.connect(gainNode);
-      gainNode.connect(this.remoteAudioContext.destination);
-      
-      source.onended = () => {
-        this.currentState.isPlaying = false;
-        this.stateSubject.next({ ...this.currentState });
-      };
-
-      this.currentState.isPlaying = true;
-      this.stateSubject.next({ ...this.currentState });
-
-      source.start(0);
-      this.remoteAudioSource = source;
-
-      console.log('[Audio Communication] Playing remote audio (PCM format)');
     } catch (error: any) {
       console.error('[Audio Communication] Error handling remote audio:', error);
-      console.error('[Audio Communication] Error details:', error.message);
     }
+  }
+
+  /**
+   * Process audio queue for smooth continuous playback
+   */
+  private async processAudioQueue(): Promise<void> {
+    if (this.isProcessingQueue || !this.remoteAudioContext) {
+      return;
+    }
+
+    this.isProcessingQueue = true;
+
+    while (this.audioQueue.length > 0) {
+      const audioData = this.audioQueue.shift();
+      if (!audioData) continue;
+
+      try {
+        // Convert Int16Array PCM to Float32Array for Web Audio API
+        const pcmData = new Int16Array(audioData);
+        const floatData = new Float32Array(pcmData.length);
+        
+        // Convert 16-bit PCM to float32 (-1.0 to 1.0)
+        for (let i = 0; i < pcmData.length; i++) {
+          const sample = pcmData[i];
+          floatData[i] = sample < 0 ? sample / 0x8000 : sample / 0x7FFF;
+        }
+
+        // Create audio buffer (16kHz, mono)
+        const sampleRate = 16000;
+        const audioBuffer = this.remoteAudioContext.createBuffer(1, floatData.length, sampleRate);
+        audioBuffer.copyToChannel(floatData, 0);
+
+        // Wait for current source to finish or schedule next
+        if (this.currentSource) {
+          // Schedule next buffer to start when current ends
+          const nextSource = this.remoteAudioContext.createBufferSource();
+          const gainNode = this.remoteAudioContext.createGain();
+          
+          nextSource.buffer = audioBuffer;
+          gainNode.gain.value = this.currentState.volume;
+          
+          nextSource.connect(gainNode);
+          gainNode.connect(this.remoteAudioContext.destination);
+          
+          // Calculate when to start (when current ends)
+          const currentTime = this.remoteAudioContext.currentTime;
+          const bufferDuration = audioBuffer.duration;
+          
+          nextSource.start(currentTime + bufferDuration);
+          this.currentSource = nextSource;
+        } else {
+          // First buffer - start immediately
+          const source = this.remoteAudioContext.createBufferSource();
+          const gainNode = this.remoteAudioContext.createGain();
+          
+          source.buffer = audioBuffer;
+          gainNode.gain.value = this.currentState.volume;
+          
+          source.connect(gainNode);
+          gainNode.connect(this.remoteAudioContext.destination);
+          
+          source.onended = () => {
+            this.currentSource = null;
+            if (this.audioQueue.length === 0) {
+              this.currentState.isPlaying = false;
+              this.stateSubject.next({ ...this.currentState });
+            }
+          };
+
+          this.currentState.isPlaying = true;
+          this.stateSubject.next({ ...this.currentState });
+
+          source.start(0);
+          this.currentSource = source;
+        }
+      } catch (error: any) {
+        console.error('[Audio Communication] Error processing audio chunk:', error);
+      }
+    }
+
+    this.isProcessingQueue = false;
   }
 
   /**

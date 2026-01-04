@@ -91,33 +91,54 @@ export class WebPubSubService {
       // Handle group messages (audio data)
       this.client.on('group-message', (e) => {
         try {
-          const message = e.message.data as any;
+          console.log('[Web PubSub] Group message received:', e);
+          
+          // Handle different message formats
+          let message: any;
+          if (typeof e.message.data === 'string') {
+            try {
+              message = JSON.parse(e.message.data);
+            } catch {
+              // If not JSON, treat as raw data
+              message = { type: 'audio', data: e.message.data };
+            }
+          } else {
+            message = e.message.data;
+          }
           
           if (message.type === 'audio' && message.data) {
             // Convert base64 to ArrayBuffer if needed
             let audioData: ArrayBuffer;
             if (typeof message.data === 'string') {
-              const binaryString = atob(message.data);
-              const bytes = new Uint8Array(binaryString.length);
-              for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
+              try {
+                const binaryString = atob(message.data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                  bytes[i] = binaryString.charCodeAt(i);
+                }
+                audioData = bytes.buffer;
+              } catch (error) {
+                console.error('[Web PubSub] Error decoding base64 audio:', error);
+                return;
               }
-              audioData = bytes.buffer;
-            } else {
+            } else if (message.data instanceof ArrayBuffer) {
               audioData = message.data;
+            } else {
+              console.warn('[Web PubSub] Unknown audio data format:', typeof message.data);
+              return;
             }
 
             this.audioMessageSubject.next({
               type: 'audio',
               data: audioData,
-              senderId: message.senderId,
-              timestamp: message.timestamp,
+              senderId: message.senderId || 'unknown',
+              timestamp: message.timestamp || new Date().toISOString(),
             });
           } else if (message.type === 'control') {
             this.controlMessageSubject.next({
               type: 'control',
-              senderId: message.senderId,
-              timestamp: message.timestamp,
+              senderId: message.senderId || 'unknown',
+              timestamp: message.timestamp || new Date().toISOString(),
               action: message.action,
             });
           }
@@ -131,13 +152,31 @@ export class WebPubSubService {
       await this.client.start();
       console.log('[Web PubSub] Client start() called, waiting for connection event...');
       
+      // Wait for connection to be established
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Connection timeout'));
+        }, 10000);
+        
+        this.client!.on('connected', () => {
+          clearTimeout(timeout);
+          console.log('[Web PubSub] Connected event received');
+          resolve();
+        });
+      });
+      
       // Join group if targetUserId is provided
       if (targetUserId) {
         const currentUser = this.authService.currentUser();
         if (currentUser && currentUser.id) {
           const groupId = [currentUser.id, targetUserId].sort().join('-');
-          await this.client.joinGroup(groupId);
-          console.log(`[Web PubSub] Joined group: ${groupId}`);
+          try {
+            await this.client.joinGroup(groupId);
+            console.log(`[Web PubSub] Successfully joined group: ${groupId}`);
+          } catch (error) {
+            console.error(`[Web PubSub] Error joining group ${groupId}:`, error);
+            // Continue anyway - might already be in group via token
+          }
         }
       }
     } catch (error: any) {

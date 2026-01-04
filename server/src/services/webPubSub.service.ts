@@ -111,10 +111,11 @@ class WebPubSubService {
     }
 
     try {
-      await this.serviceClient.sendToGroup(this.hubName, groupId, message, {
+      // Correct API: sendToGroup(hubName, groupId, content, options)
+      await this.serviceClient.sendToGroup(this.hubName, groupId, JSON.stringify(message), {
         contentType: 'application/json',
       });
-      console.log(`[Web PubSub] Sent message to group ${groupId}`);
+      console.log(`[Web PubSub] Sent message to group ${groupId} in hub ${this.hubName}`);
     } catch (error: any) {
       console.error(`[Web PubSub] Error sending to group ${groupId}:`, error);
       throw error;
@@ -131,7 +132,7 @@ class WebPubSubService {
     }
 
     try {
-      await this.serviceClient.sendToAll(this.hubName, message, {
+      await this.serviceClient.sendToAll(this.hubName, JSON.stringify(message), {
         contentType: 'application/json',
       });
       console.log('[Web PubSub] Broadcast message sent');
