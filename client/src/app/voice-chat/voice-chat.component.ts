@@ -77,8 +77,8 @@ export class VoiceChatComponent implements OnInit, OnDestroy {
 
       // Get target user info
       try {
-        const user = await this.userService.getUserById(this.targetUserId).toPromise();
-        this.targetUserName = user?.username || 'Unknown User';
+        const response = await this.userService.getUserProfile(this.targetUserId).toPromise();
+        this.targetUserName = response?.data?.username || 'Unknown User';
       } catch {
         this.targetUserName = 'User ' + this.targetUserId;
       }
