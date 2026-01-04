@@ -181,32 +181,29 @@ import { environment } from '../../environments/environment';
             </div>
           </div>
 
-          <!-- Testing Talk Section - Single Button -->
+          <!-- Voice Call - Super Simple -->
           <div class="testing-talk-panel">
             <h3>Voice Call</h3>
             
-            <select
-              [(ngModel)]="testSelectedContactId"
-              class="contact-select"
-              [disabled]="isInTestCall || contacts.length === 0"
-            >
-              <option value="">Select contact...</option>
-              <option *ngFor="let contact of contacts" [value]="contact.id">
-                {{ contact.username }}
-              </option>
-            </select>
+            <!-- Contact List with Direct Call Buttons -->
+            <div class="contacts-call-list" *ngIf="!isInTestCall">
+              <div *ngFor="let contact of contacts" class="contact-call-item">
+                <span class="contact-name">{{ contact.username }}</span>
+                <button
+                  class="btn-call-direct"
+                  (click)="callContactDirect(contact.id)"
+                  [disabled]="contacts.length === 0"
+                >
+                  📞 Call
+                </button>
+              </div>
+              <p *ngIf="contacts.length === 0" class="no-contacts">No contacts available</p>
+            </div>
 
-            <div class="call-buttons">
-              <button
-                *ngIf="!isInTestCall"
-                class="btn-call"
-                (click)="callContact()"
-                [disabled]="!testSelectedContactId || contacts.length === 0"
-              >
-                📞 Call
-              </button>
-              
-              <div *ngIf="isInTestCall" class="call-active">
+            <!-- During Call - Simple Controls -->
+            <div *ngIf="isInTestCall" class="call-active-simple">
+              <div class="call-status-text">Calling {{ getCurrentContactName() }}...</div>
+              <div class="call-controls">
                 <button
                   class="btn-record"
                   [class.recording]="getAudioState().isRecording"
@@ -219,11 +216,6 @@ import { environment } from '../../environments/environment';
                 </button>
                 <button class="btn-end" (click)="endTestCall()">❌ End</button>
               </div>
-            </div>
-
-            <div class="status-simple" *ngIf="isInTestCall">
-              <span [class.active]="getAudioState().isRecording">🔴 {{ getAudioState().isRecording ? 'Recording' : 'Idle' }}</span>
-              <span [class.active]="getAudioState().isPlaying">🔊 {{ getAudioState().isPlaying ? 'Playing' : 'Idle' }}</span>
             </div>
           </div>
         </div>
@@ -843,26 +835,62 @@ import { environment } from '../../environments/environment';
       justify-content: center;
       margin-bottom: 1rem;
     }
-    .btn-call {
-      width: 100%;
-      max-width: 300px;
-      padding: 1rem 2rem;
+    .contacts-call-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .contact-call-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+    }
+    .contact-call-item .contact-name {
+      font-weight: 600;
+      color: var(--text-primary);
+      font-size: 1rem;
+    }
+    .btn-call-direct {
+      padding: 0.75rem 1.5rem;
       border-radius: 8px;
       border: none;
       background: var(--button-gradient);
       color: white;
-      font-size: 1.1rem;
+      font-size: 1rem;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.2s;
     }
-    .btn-call:hover:not(:disabled) {
+    .btn-call-direct:hover:not(:disabled) {
       transform: translateY(-2px);
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
     }
-    .btn-call:disabled {
+    .btn-call-direct:disabled {
       opacity: 0.5;
       cursor: not-allowed;
+    }
+    .no-contacts {
+      text-align: center;
+      color: var(--text-secondary);
+      padding: 2rem;
+    }
+    .call-active-simple {
+      text-align: center;
+    }
+    .call-status-text {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 1rem;
+    }
+    .call-controls {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
     }
     .call-active {
       display: flex;
@@ -2564,6 +2592,99 @@ export class PanicComponent implements OnInit, OnDestroy {
       return (parts[0][0] + parts[1][0]).toUpperCase();
     }
     return username.substring(0, 2).toUpperCase();
+  }
+
+  // Direct call - one click, everything happens automatically
+  async callContactDirect(contactId: string): Promise<void> {
+    if (this.isInTestCall || !contactId) {
+      return;
+    }
+
+    try {
+      const currentUser = this.authService.currentUser();
+      if (!currentUser || !currentUser.id) {
+        this.toastService.show('You must be logged in', 'error');
+        return;
+      }
+
+      const selectedContact = this.contacts.find(c => c.id === contactId);
+      if (!selectedContact) {
+        this.toastService.show('Contact not found', 'error');
+        return;
+      }
+
+      this.testSelectedContactId = contactId;
+      this.isInTestCall = true;
+      this.callStatus = 'calling';
+      this.toastService.show(`Connecting to ${selectedContact.username}...`, 'info');
+
+      // Step 1: Initialize audio FIRST (this connects to Web PubSub)
+      console.log('[Call] Step 1: Initializing audio communication...');
+      await this.audioCommService.initialize(currentUser.id, contactId);
+      
+      // Step 2: Wait for Web PubSub connection to be fully established
+      console.log('[Call] Step 2: Waiting for Web PubSub connection...');
+      let connectionReady = false;
+      for (let i = 0; i < 50; i++) { // Wait up to 5 seconds
+        const state = this.audioCommService.getState();
+        if (state.isConnected) {
+          connectionReady = true;
+          console.log('[Call] ✅ Web PubSub connection ready');
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      if (!connectionReady) {
+        throw new Error('Web PubSub connection timeout. Please try again.');
+      }
+      
+      // Step 3: Set up call
+      this.currentCallId = `call_${Date.now()}_${currentUser.id}`;
+      this.isCaller = true;
+      
+      // Step 4: Connect to panic call service if needed
+      if (!this.isWebPubSubConnected) {
+        await this.panicCallService.connect(currentUser.id);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        this.isWebPubSubConnected = this.panicCallService.isConnectedToPubSub();
+      }
+      
+      // Step 5: Join call group
+      await this.panicCallService.joinCallGroup(this.currentCallId);
+      
+      // Step 6: Send call notification
+      await this.panicCallService.sendIncomingCall(
+        this.currentCallId,
+        contactId,
+        currentUser.username || 'Unknown',
+        'single'
+      );
+      
+      // Step 7: Start recording - ensure connection is ready
+      console.log('[Call] Step 7: Starting recording...');
+      // Double-check connection before starting
+      const finalState = this.audioCommService.getState();
+      if (!finalState.isConnected) {
+        throw new Error('Audio connection not ready');
+      }
+      await this.audioCommService.startRecording();
+      
+      this.callStatus = 'connected';
+      this.toastService.show(`Connected to ${selectedContact.username}`, 'success');
+      console.log('[Call] ✅ Call active and recording');
+      
+    } catch (error: any) {
+      console.error('[Call] Error:', error);
+      this.toastService.show(error.message || 'Call failed', 'error');
+      await this.endTestCall();
+    }
+  }
+
+  getCurrentContactName(): string {
+    if (!this.testSelectedContactId) return 'Unknown';
+    const contact = this.contacts.find(c => c.id === this.testSelectedContactId);
+    return contact?.username || 'Unknown';
   }
 }
 

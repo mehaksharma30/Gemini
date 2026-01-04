@@ -235,14 +235,42 @@ export class WebPubSubService {
       // Wait for connection to be established
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
-          reject(new Error('Connection timeout'));
+          reject(new Error('Connection timeout after 10 seconds'));
         }, 10000);
         
-        this.client!.on('connected', () => {
+        // Check if already connected
+        if (this.client && (this.client as any).state === 'Connected') {
           clearTimeout(timeout);
-          console.log('[Web PubSub] Connected event received');
+          console.log('[Web PubSub] Already connected');
+          this.connectedSubject.next(true);
           resolve();
-        });
+          return;
+        }
+        
+        const connectedHandler = () => {
+          clearTimeout(timeout);
+          console.log('[Web PubSub] ✅ Connected event received');
+          this.connectedSubject.next(true);
+          this.client!.off('connected', connectedHandler);
+          resolve();
+        };
+        
+        this.client!.on('connected', connectedHandler);
+        
+        // Also check periodically in case event was missed
+        const checkInterval = setInterval(() => {
+          if (this.client && (this.client as any).state === 'Connected') {
+            clearInterval(checkInterval);
+            clearTimeout(timeout);
+            console.log('[Web PubSub] ✅ Connection verified via state check');
+            this.connectedSubject.next(true);
+            this.client!.off('connected', connectedHandler);
+            resolve();
+          }
+        }, 100);
+        
+        // Clear interval on timeout
+        setTimeout(() => clearInterval(checkInterval), 10000);
       });
       
       // Join group if targetUserId is provided
@@ -367,7 +395,13 @@ export class WebPubSubService {
    * Check if client is connected
    */
   isConnected(): boolean {
-    return this.client !== null && this.connectedSubject.value;
+    const isConnected = this.client !== null && this.connectedSubject.value;
+    // Also check the client's internal state if available
+    if (this.client && (this.client as any).state) {
+      const clientState = (this.client as any).state;
+      return isConnected && (clientState === 'Connected' || clientState === 'connected');
+    }
+    return isConnected;
   }
 }
 

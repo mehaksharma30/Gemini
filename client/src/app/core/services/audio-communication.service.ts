@@ -8,6 +8,7 @@ export interface AudioStreamState {
   isPlaying: boolean;
   isMuted: boolean;
   volume: number;
+  isConnected: boolean;
 }
 
 @Injectable({
@@ -38,6 +39,7 @@ export class AudioCommunicationService {
     isPlaying: false,
     isMuted: false,
     volume: 1.0,
+    isConnected: false,
   };
 
   private groupId: string = '';
@@ -51,6 +53,16 @@ export class AudioCommunicationService {
     // Subscribe to control messages
     this.webPubSubService.controlMessages$.subscribe((message) => {
       this.handleControlMessage(message);
+    });
+
+    // Subscribe to Web PubSub connection status
+    this.webPubSubService.connected$.subscribe(connected => {
+      this.currentState.isConnected = connected;
+      this.stateSubject.next({ ...this.currentState });
+      if (!connected) {
+        // Stop recording if disconnected
+        this.stopRecording().catch(console.error);
+      }
     });
   }
 
@@ -114,7 +126,11 @@ export class AudioCommunicationService {
         await this.remoteAudioContext.resume();
       }
 
-      console.log('[Audio Communication] Initialized successfully for group:', this.groupId);
+      // Update connection state
+      this.currentState.isConnected = true;
+      this.stateSubject.next({ ...this.currentState });
+
+      console.log('[Audio Communication] ✅ Initialized successfully for group:', this.groupId);
     } catch (error: any) {
       console.error('[Audio Communication] Initialization error:', error);
       this.errorSubject.next(error.message || 'Failed to initialize audio communication');
@@ -128,9 +144,35 @@ export class AudioCommunicationService {
   async startRecording(): Promise<void> {
     try {
       if (this.currentState.isRecording) {
+        console.log('[Audio Communication] Already recording');
         return;
       }
 
+      if (!this.groupId) {
+        throw new Error('Not initialized. Call initialize() first.');
+      }
+
+      // Wait for connection to be ready
+      if (!this.webPubSubService.isConnected()) {
+        console.log('[Audio Communication] Waiting for Web PubSub connection...');
+        let connected = false;
+        for (let i = 0; i < 30; i++) { // Wait up to 3 seconds
+          if (this.webPubSubService.isConnected()) {
+            connected = true;
+            break;
+          }
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+        if (!connected) {
+          throw new Error('Web PubSub not connected. Please try again.');
+        }
+      }
+      
+      console.log('[Audio Communication] ✅ Web PubSub connection verified');
+
+      console.log('[Audio Communication] Requesting microphone access...');
+      
       // Get user media (microphone)
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -141,6 +183,8 @@ export class AudioCommunicationService {
           autoGainControl: true,
         },
       });
+      
+      console.log('[Audio Communication] Microphone access granted');
 
       // Use Web Audio API to capture PCM audio for real-time streaming
       const source = this.audioContext!.createMediaStreamSource(this.mediaStream);
