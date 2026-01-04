@@ -213,26 +213,46 @@ export class WebPubSubService {
       throw new Error('Web PubSub client not connected');
     }
 
+    if (!this.isConnected()) {
+      throw new Error('Web PubSub client not connected');
+    }
+
     try {
       // Convert ArrayBuffer to base64 for transmission
+      // Use chunked conversion for large arrays to avoid stack overflow
       const bytes = new Uint8Array(audioData);
-      const binaryString = String.fromCharCode(...bytes);
+      let binaryString = '';
+      const chunkSize = 8192;
+      
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.slice(i, i + chunkSize);
+        binaryString += String.fromCharCode.apply(null, Array.from(chunk));
+      }
+      
       const base64 = btoa(binaryString);
 
       const currentUser = this.authService.currentUser();
-      const message: AudioMessage = {
+      const message = {
         type: 'audio',
-        data: audioData,
+        data: base64, // Send as base64 string
         senderId: currentUser?.id || '',
         timestamp: new Date().toISOString(),
       };
 
-      await this.client.sendToGroup(groupId, {
-        ...message,
-        data: base64, // Send as base64 string
-      }, 'json');
-    } catch (error) {
+      await this.client.sendToGroup(groupId, message, 'json');
+      
+      // Log occasionally to avoid spam
+      if (Math.random() < 0.01) { // Log 1% of messages
+        console.log(`[Web PubSub] Sent audio to group ${groupId}, size: ${audioData.byteLength} bytes`);
+      }
+    } catch (error: any) {
       console.error('[Web PubSub] Error sending audio:', error);
+      console.error('[Web PubSub] Error details:', {
+        message: error.message,
+        groupId,
+        audioSize: audioData.byteLength,
+        isConnected: this.isConnected()
+      });
       throw error;
     }
   }

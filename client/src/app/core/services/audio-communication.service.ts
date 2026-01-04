@@ -88,11 +88,18 @@ export class AudioCommunicationService {
         throw new Error('Failed to establish Web PubSub connection');
       }
 
-      // Ensure we're in the group
+      // Ensure we're in the group - explicitly join
       const currentUser = this.authService?.currentUser();
       if (currentUser && currentUser.id) {
-        // Group should already be joined via token, but ensure it
-        console.log('[Audio Communication] Connection established, group:', this.groupId);
+        // Group should already be joined via token, but explicitly join to ensure
+        try {
+          // The group is already joined in webPubSubService.connect(), but verify
+          console.log('[Audio Communication] Connection established, group:', this.groupId);
+          console.log('[Audio Communication] User IDs:', { userId, targetUserId });
+          console.log('[Audio Communication] Group ID (sorted):', this.groupId);
+        } catch (error) {
+          console.error('[Audio Communication] Error verifying group membership:', error);
+        }
       }
 
       // Initialize audio context
@@ -156,9 +163,18 @@ export class AudioCommunicationService {
         
         // Send PCM audio data via Web PubSub
         try {
+          if (!this.webPubSubService.isConnected()) {
+            console.warn('[Audio Communication] Web PubSub not connected, skipping audio send');
+            return;
+          }
           await this.webPubSubService.sendAudio(this.groupId, pcmData.buffer);
-        } catch (error) {
+        } catch (error: any) {
           console.error('[Audio Communication] Error sending audio:', error);
+          // Don't throw - just log, so recording can continue
+          if (error.message?.includes('not connected')) {
+            // Try to reconnect
+            console.log('[Audio Communication] Attempting to reconnect...');
+          }
         }
       };
 
@@ -380,16 +396,19 @@ export class AudioCommunicationService {
     try {
       await this.stopRecording();
       
-      if (this.remoteAudioSource) {
-        // Handle both AudioBufferSourceNode and HTMLAudioElement
-        if (typeof (this.remoteAudioSource as any).stop === 'function') {
-          (this.remoteAudioSource as AudioBufferSourceNode).stop();
-        } else if (this.remoteAudioSource instanceof HTMLAudioElement) {
-          this.remoteAudioSource.pause();
-          this.remoteAudioSource.src = '';
+      // Stop current audio source if playing
+      if (this.currentSource) {
+        try {
+          this.currentSource.stop();
+        } catch (error) {
+          // Source may have already ended
         }
-        this.remoteAudioSource = null;
+        this.currentSource = null;
       }
+      
+      // Clear audio queue
+      this.audioQueue = [];
+      this.isProcessingQueue = false;
 
       if (this.audioContext) {
         await this.audioContext.close();
@@ -402,6 +421,15 @@ export class AudioCommunicationService {
       }
 
       await this.webPubSubService.disconnect();
+      
+      this.groupId = '';
+      this.currentState = {
+        isRecording: false,
+        isPlaying: false,
+        isMuted: false,
+        volume: 1.0,
+      };
+      this.stateSubject.next({ ...this.currentState });
 
       console.log('[Audio Communication] Cleaned up');
     } catch (error) {

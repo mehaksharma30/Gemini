@@ -10,7 +10,7 @@ import { VoiceChatService } from '../core/services/voice-chat.service';
 import { SpeechToTextService } from '../core/services/speech-to-text.service';
 import { AuthService } from '../core/services/auth.service';
 import { PanicCallService, IncomingCall } from '../core/services/panic-call.service';
-import { WebRTCAudioService } from '../core/services/webrtc-audio.service';
+import { AudioCommunicationService } from '../core/services/audio-communication.service';
 import { environment } from '../../environments/environment';
 
 @Component({
@@ -250,6 +250,18 @@ import { environment } from '../../environments/environment';
                     {{ isTestCallConnected ? '✅ CONNECTED' : '📞 CONNECTING...' }}
                   </span>
                 </div>
+                <div class="status-item" *ngIf="callStatus === 'connected'">
+                  <span class="status-label">Recording:</span>
+                  <span class="status-value" [class.active]="getAudioState().isRecording">
+                    {{ getAudioState().isRecording ? '🔴 RECORDING' : '⚪ IDLE' }}
+                  </span>
+                </div>
+                <div class="status-item" *ngIf="callStatus === 'connected'">
+                  <span class="status-label">Receiving:</span>
+                  <span class="status-value" [class.active]="getAudioState().isPlaying">
+                    {{ getAudioState().isPlaying ? '🔊 PLAYING' : '⚪ IDLE' }}
+                  </span>
+                </div>
                 <div class="status-item">
                   <span class="status-label">Muted:</span>
                   <span class="status-value" [class.active]="isMuted()">
@@ -274,9 +286,17 @@ import { environment } from '../../environments/environment';
                   📢 Alert All
                 </button>
                 <button
+                  *ngIf="isInTestCall && callStatus === 'connected'"
+                  class="test-btn record-btn"
+                  [class.recording]="getAudioState().isRecording"
+                  (click)="getAudioState().isRecording ? stopTestRecording() : startTestRecording()"
+                >
+                  {{ getAudioState().isRecording ? '⏹️ Stop Recording' : '🎤 Start Recording' }}
+                </button>
+                <button
                   class="test-btn mute-btn"
                   (click)="toggleTestMute()"
-                  [disabled]="!isInTestCall"
+                  [disabled]="!isInTestCall || callStatus !== 'connected'"
                 >
                   {{ isMuted() ? '🔊 Unmute' : '🔇 Mute' }}
                 </button>
@@ -1294,7 +1314,7 @@ export class PanicComponent implements OnInit, OnDestroy {
   private http = inject(HttpClient);
   private authService = inject(AuthService);
   private panicCallService = inject(PanicCallService);
-  private webrtcService = inject(WebRTCAudioService);
+  private audioCommService = inject(AudioCommunicationService);
   private cdr = inject(ChangeDetectorRef);
 
   message = '';
@@ -1366,12 +1386,12 @@ export class PanicComponent implements OnInit, OnDestroy {
     });
     this.subscriptions.push(signalSub);
     
-    // Subscribe to WebRTC state
-    const webrtcSub = this.webrtcService.state$.subscribe(state => {
-      this.isTestCallConnected = state.isConnected;
+    // Subscribe to audio communication state
+    const audioSub = this.audioCommService.state$.subscribe(state => {
+      this.isTestCallConnected = state.isRecording || state.isPlaying;
       this.cdr.detectChanges();
     });
-    this.subscriptions.push(webrtcSub);
+    this.subscriptions.push(audioSub);
   }
 
   loadEmergencyContacts(): void {
@@ -2173,12 +2193,8 @@ export class PanicComponent implements OnInit, OnDestroy {
       // Join call group
       await this.panicCallService.joinCallGroup(this.currentCallId);
       
-      // Initialize WebRTC
-      await this.webrtcService.initialize(this.currentCallId, true);
-      
-      // Create and send offer
-      const offer = await this.webrtcService.createOffer();
-      await this.panicCallService.sendWebRTCOffer(this.currentCallId, offer);
+      // Initialize audio communication with Web PubSub
+      await this.audioCommService.initialize(currentUser.id, this.testSelectedContactId);
       
       // Send incoming call notification
       await this.panicCallService.sendIncomingCall(
@@ -2188,11 +2204,8 @@ export class PanicComponent implements OnInit, OnDestroy {
         'single'
       );
       
-      // Set up ICE candidate handler
-      const iceSub = this.webrtcService.getICECandidates().subscribe(candidate => {
-        this.panicCallService.sendWebRTCICE(this.currentCallId, candidate);
-      });
-      this.subscriptions.push(iceSub);
+      // Start recording automatically when call is accepted
+      // (Will be handled when call_accept signal is received)
       
       this.toastService.show(`Calling ${selectedContact.username}...`, 'info');
       console.log('[Testing Talk] Call initiated');
@@ -2230,8 +2243,8 @@ export class PanicComponent implements OnInit, OnDestroy {
       // Join call group
       await this.panicCallService.joinCallGroup(this.currentCallId);
       
-      // Initialize WebRTC
-      await this.webrtcService.initialize(this.currentCallId, true);
+      // Initialize audio communication with Web PubSub
+      await this.audioCommService.initialize(currentUser.id, this.broadcastContactIds[0] || '');
       
       // Send broadcast call to all contacts
       await this.panicCallService.sendBroadcastCall(
@@ -2272,8 +2285,8 @@ export class PanicComponent implements OnInit, OnDestroy {
         await this.panicCallService.leaveCallGroup(this.currentCallId);
       }
       
-      // Cleanup WebRTC
-      await this.webrtcService.cleanup();
+      // Cleanup audio communication
+      await this.audioCommService.cleanup();
       
       // Clear broadcast timeout
       if (this.broadcastCallTimeout) {
@@ -2302,7 +2315,8 @@ export class PanicComponent implements OnInit, OnDestroy {
     if (!this.isInTestCall) {
       return false;
     }
-    return this.webrtcService.isMuted();
+    const state = this.audioCommService.getState();
+    return state.isMuted;
   }
 
   async toggleTestMute(): Promise<void> {
@@ -2311,16 +2325,48 @@ export class PanicComponent implements OnInit, OnDestroy {
     }
 
     try {
-      this.webrtcService.toggleMute();
-      const muted = this.webrtcService.isMuted();
+      await this.audioCommService.toggleMute();
+      const state = this.audioCommService.getState();
       this.toastService.show(
-        muted ? 'Microphone muted' : 'Microphone unmuted',
+        state.isMuted ? 'Microphone muted' : 'Microphone unmuted',
         'info'
       );
     } catch (error: any) {
       console.error('[Testing Talk] Error toggling mute:', error);
       this.toastService.show('Error toggling mute', 'error');
     }
+  }
+
+  async startTestRecording(): Promise<void> {
+    if (!this.isInTestCall || this.callStatus !== 'connected') {
+      return;
+    }
+
+    try {
+      await this.audioCommService.startRecording();
+      this.toastService.show('Recording started', 'info');
+    } catch (error: any) {
+      console.error('[Testing Talk] Error starting recording:', error);
+      this.toastService.show(error.message || 'Failed to start recording', 'error');
+    }
+  }
+
+  async stopTestRecording(): Promise<void> {
+    if (!this.isInTestCall) {
+      return;
+    }
+
+    try {
+      await this.audioCommService.stopRecording();
+      this.toastService.show('Recording stopped', 'info');
+    } catch (error: any) {
+      console.error('[Testing Talk] Error stopping recording:', error);
+      this.toastService.show('Error stopping recording', 'error');
+    }
+  }
+
+  getAudioState() {
+    return this.audioCommService.getState();
   }
 
   // Handle incoming call
@@ -2348,14 +2394,11 @@ export class PanicComponent implements OnInit, OnDestroy {
       // Send accept signal
       await this.panicCallService.sendCallAccept(this.currentCallId, this.incomingCall.fromUserId);
       
-      // Initialize WebRTC (callee)
-      await this.webrtcService.initialize(this.currentCallId, false);
+      // Initialize audio communication with Web PubSub (callee)
+      await this.audioCommService.initialize(currentUser.id, this.incomingCall.fromUserId);
       
-      // Set up ICE candidate handler
-      const iceSub = this.webrtcService.getICECandidates().subscribe(candidate => {
-        this.panicCallService.sendWebRTCICE(this.currentCallId, candidate);
-      });
-      this.subscriptions.push(iceSub);
+      // Start recording automatically when accepting call
+      await this.audioCommService.startRecording();
       
       this.toastService.show(`Connected to ${this.incomingCall.fromName}`, 'success');
       console.log('[Testing Talk] Incoming call accepted');
@@ -2404,7 +2447,14 @@ export class PanicComponent implements OnInit, OnDestroy {
               }
             }
             
-            this.toastService.show('Call connected!', 'success');
+            // Start recording when call is accepted
+            try {
+              await this.audioCommService.startRecording();
+            } catch (error) {
+              console.error('[Testing Talk] Error starting recording after accept:', error);
+            }
+            
+            this.toastService.show('Call connected! Audio streaming started.', 'success');
           }
           break;
           
@@ -2429,21 +2479,12 @@ export class PanicComponent implements OnInit, OnDestroy {
           await this.endTestCall();
           break;
           
+        // WebRTC signals no longer needed - using Web PubSub for audio
+        // Keeping these cases for backward compatibility but they won't be used
         case 'webrtc_offer':
-          if (!this.isCaller) {
-            const answer = await this.webrtcService.handleOffer(signal.sdp);
-            await this.panicCallService.sendWebRTCAnswer(this.currentCallId, answer);
-          }
-          break;
-          
         case 'webrtc_answer':
-          if (this.isCaller) {
-            await this.webrtcService.handleAnswer(signal.sdp);
-          }
-          break;
-          
         case 'webrtc_ice':
-          await this.webrtcService.addICECandidate(signal.candidate);
+          // Ignore - using Web PubSub audio streaming instead
           break;
       }
     } catch (error: any) {
