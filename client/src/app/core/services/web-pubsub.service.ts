@@ -91,21 +91,68 @@ export class WebPubSubService {
       // Handle group messages (audio data)
       this.client.on('group-message', (e) => {
         try {
-          console.log('[Web PubSub] Group message received:', e);
+          // Log first 10 messages to debug format, then occasionally
+          const messageCount = (this as any).__messageCount = ((this as any).__messageCount || 0) + 1;
+          const shouldLog = messageCount <= 10 || Math.random() < 0.01; // Log first 10, then 1%
+          
+          if (shouldLog) {
+            console.log('[Web PubSub] 🔍 Group message #' + messageCount + ':', {
+              dataType: typeof e.message.data,
+              hasData: !!e.message.data,
+              dataIsString: typeof e.message.data === 'string',
+              dataIsObject: typeof e.message.data === 'object',
+              messageKeys: e.message.data && typeof e.message.data === 'object' ? Object.keys(e.message.data) : 'N/A',
+              rawDataPreview: typeof e.message.data === 'string' ? e.message.data.substring(0, 200) : (e.message.data ? 'object/arraybuffer' : 'null/undefined'),
+              fullMessage: e.message
+            });
+          }
           
           // Handle different message formats
           let message: any;
+          
+          // Web PubSub sends data as JSON string or object depending on how it was sent
           if (typeof e.message.data === 'string') {
             try {
               message = JSON.parse(e.message.data);
-            } catch {
-              // If not JSON, treat as raw data
+              if (shouldLog) {
+                console.log('[Web PubSub] ✅ Parsed JSON string, message:', message);
+              }
+            } catch (parseError) {
+              // If not JSON, might be base64 audio directly
+              if (shouldLog) {
+                console.log('[Web PubSub] Data is string but not JSON, treating as base64 audio, length:', e.message.data.length);
+              }
               message = { type: 'audio', data: e.message.data };
             }
-          } else {
+          } else if (e.message.data && typeof e.message.data === 'object') {
+            // Already an object - use directly
             message = e.message.data;
+            if (shouldLog) {
+              console.log('[Web PubSub] ✅ Message is already object:', message);
+            }
+          } else {
+            if (shouldLog) {
+              console.warn('[Web PubSub] ❌ Unexpected message format:', {
+                dataType: typeof e.message.data,
+                data: e.message.data,
+                fullEvent: e
+              });
+            }
+            return;
           }
           
+          if (shouldLog) {
+            console.log('[Web PubSub] 📦 Parsed message:', {
+              type: message.type,
+              hasData: !!message.data,
+              dataType: typeof message.data,
+              dataLength: typeof message.data === 'string' ? message.data.length : (message.data?.byteLength || 'N/A'),
+              senderId: message.senderId,
+              allKeys: Object.keys(message)
+            });
+          }
+          
+          // Check if it's an audio message
           if (message.type === 'audio' && message.data) {
             // Convert base64 to ArrayBuffer if needed
             let audioData: ArrayBuffer;
@@ -117,23 +164,43 @@ export class WebPubSubService {
                   bytes[i] = binaryString.charCodeAt(i);
                 }
                 audioData = bytes.buffer;
+                
+                if (shouldLog) {
+                  console.log('[Web PubSub] ✅ Decoded audio data, size:', audioData.byteLength, 'bytes');
+                }
               } catch (error) {
-                console.error('[Web PubSub] Error decoding base64 audio:', error);
+                console.error('[Web PubSub] ❌ Error decoding base64 audio:', error);
                 return;
               }
             } else if (message.data instanceof ArrayBuffer) {
               audioData = message.data;
             } else {
-              console.warn('[Web PubSub] Unknown audio data format:', typeof message.data);
+              if (shouldLog) {
+                console.warn('[Web PubSub] ❌ Unknown audio data format:', typeof message.data, message.data);
+              }
               return;
             }
 
+            // Don't play our own audio back
+            const currentUser = this.authService.currentUser();
+            if (currentUser && message.senderId === currentUser.id) {
+              if (shouldLog) {
+                console.log('[Web PubSub] ⏭️ Ignoring own audio message from:', message.senderId);
+              }
+              return;
+            }
+
+            // Emit audio message
             this.audioMessageSubject.next({
               type: 'audio',
               data: audioData,
               senderId: message.senderId || 'unknown',
               timestamp: message.timestamp || new Date().toISOString(),
             });
+            
+            if (shouldLog || messageCount % 50 === 0) {
+              console.log('[Web PubSub] 🔊 Audio message emitted to subscribers, sender:', message.senderId, 'size:', audioData.byteLength);
+            }
           } else if (message.type === 'control') {
             this.controlMessageSubject.next({
               type: 'control',
@@ -141,9 +208,20 @@ export class WebPubSubService {
               timestamp: message.timestamp || new Date().toISOString(),
               action: message.action,
             });
+            if (shouldLog) {
+              console.log('[Web PubSub] 🎛️ Control message processed:', message.action);
+            }
+          } else {
+            if (shouldLog) {
+              console.log('[Web PubSub] ⚠️ Message type not audio or control:', {
+                type: message.type || 'unknown',
+                keys: Object.keys(message),
+                fullMessage: message
+              });
+            }
           }
         } catch (error) {
-          console.error('[Web PubSub] Error processing message:', error);
+          console.error('[Web PubSub] ❌ Error processing message:', error);
         }
       });
 

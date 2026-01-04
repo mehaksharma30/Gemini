@@ -164,17 +164,16 @@ export class AudioCommunicationService {
         // Send PCM audio data via Web PubSub
         try {
           if (!this.webPubSubService.isConnected()) {
-            console.warn('[Audio Communication] Web PubSub not connected, skipping audio send');
+            // Silently skip if not connected (might be during cleanup)
             return;
           }
           await this.webPubSubService.sendAudio(this.groupId, pcmData.buffer);
         } catch (error: any) {
-          console.error('[Audio Communication] Error sending audio:', error);
-          // Don't throw - just log, so recording can continue
-          if (error.message?.includes('not connected')) {
-            // Try to reconnect
-            console.log('[Audio Communication] Attempting to reconnect...');
+          // Only log if it's not a disconnection error (expected during cleanup)
+          if (!error.message?.includes('not connected') && !error.message?.includes('disconnected')) {
+            console.error('[Audio Communication] Error sending audio:', error);
           }
+          // Don't throw - just return, so recording can continue
         }
       };
 
@@ -189,7 +188,13 @@ export class AudioCommunicationService {
       this.stateSubject.next({ ...this.currentState });
 
       // Send control message
-      await this.webPubSubService.sendControl(this.groupId, 'start');
+      try {
+        if (this.webPubSubService.isConnected()) {
+          await this.webPubSubService.sendControl(this.groupId, 'start');
+        }
+      } catch (error: any) {
+        console.warn('[Audio Communication] Error sending start control:', error);
+      }
 
       console.log('[Audio Communication] Recording started');
     } catch (error: any) {
@@ -230,8 +235,17 @@ export class AudioCommunicationService {
       this.currentState.isRecording = false;
       this.stateSubject.next({ ...this.currentState });
 
-      // Send control message
-      await this.webPubSubService.sendControl(this.groupId, 'stop');
+      // Send control message (ignore errors during cleanup)
+      try {
+        if (this.webPubSubService.isConnected()) {
+          await this.webPubSubService.sendControl(this.groupId, 'stop');
+        }
+      } catch (error: any) {
+        // Ignore errors during cleanup
+        if (!error.message?.includes('not connected')) {
+          console.error('[Audio Communication] Error sending stop control:', error);
+        }
+      }
 
       console.log('[Audio Communication] Recording stopped');
     } catch (error: any) {
@@ -250,8 +264,22 @@ export class AudioCommunicationService {
   private async handleRemoteAudio(message: AudioMessage): Promise<void> {
     try {
       if (!message.data || !this.remoteAudioContext) {
-        console.warn('[Audio Communication] Missing data or context');
+        console.warn('[Audio Communication] Missing data or context', {
+          hasData: !!message.data,
+          hasContext: !!this.remoteAudioContext,
+          dataSize: message.data?.byteLength
+        });
         return;
+      }
+
+      // Log occasionally to verify audio is being received
+      const shouldLog = Math.random() < 0.1; // Log 10% of audio chunks
+      if (shouldLog) {
+        console.log('[Audio Communication] Received audio chunk:', {
+          size: message.data.byteLength,
+          senderId: message.senderId,
+          queueLength: this.audioQueue.length
+        });
       }
 
       // Add to queue for smooth playback
@@ -275,6 +303,11 @@ export class AudioCommunicationService {
     }
 
     this.isProcessingQueue = true;
+    
+    // Log when starting to process
+    if (this.audioQueue.length > 0) {
+      console.log('[Audio Communication] Processing audio queue, items:', this.audioQueue.length);
+    }
 
     while (this.audioQueue.length > 0) {
       const audioData = this.audioQueue.shift();
@@ -296,51 +329,52 @@ export class AudioCommunicationService {
         const audioBuffer = this.remoteAudioContext.createBuffer(1, floatData.length, sampleRate);
         audioBuffer.copyToChannel(floatData, 0);
 
-        // Wait for current source to finish or schedule next
+        // Calculate start time
+        let startTime = 0;
         if (this.currentSource) {
           // Schedule next buffer to start when current ends
-          const nextSource = this.remoteAudioContext.createBufferSource();
-          const gainNode = this.remoteAudioContext.createGain();
-          
-          nextSource.buffer = audioBuffer;
-          gainNode.gain.value = this.currentState.volume;
-          
-          nextSource.connect(gainNode);
-          gainNode.connect(this.remoteAudioContext.destination);
-          
-          // Calculate when to start (when current ends)
           const currentTime = this.remoteAudioContext.currentTime;
           const bufferDuration = audioBuffer.duration;
-          
-          nextSource.start(currentTime + bufferDuration);
-          this.currentSource = nextSource;
-        } else {
-          // First buffer - start immediately
-          const source = this.remoteAudioContext.createBufferSource();
-          const gainNode = this.remoteAudioContext.createGain();
-          
-          source.buffer = audioBuffer;
-          gainNode.gain.value = this.currentState.volume;
-          
-          source.connect(gainNode);
-          gainNode.connect(this.remoteAudioContext.destination);
-          
-          source.onended = () => {
-            this.currentSource = null;
-            if (this.audioQueue.length === 0) {
-              this.currentState.isPlaying = false;
-              this.stateSubject.next({ ...this.currentState });
-            }
-          };
+          startTime = currentTime + bufferDuration;
+        }
 
+        // Create source and gain node
+        const source = this.remoteAudioContext.createBufferSource();
+        const gainNode = this.remoteAudioContext.createGain();
+        
+        source.buffer = audioBuffer;
+        gainNode.gain.value = this.currentState.volume;
+        
+        source.connect(gainNode);
+        gainNode.connect(this.remoteAudioContext.destination);
+        
+        source.onended = () => {
+          this.currentSource = null;
+          // Process next item in queue if available
+          if (this.audioQueue.length > 0) {
+            this.processAudioQueue();
+          } else {
+            this.currentState.isPlaying = false;
+            this.stateSubject.next({ ...this.currentState });
+          }
+        };
+
+        if (!this.currentSource) {
           this.currentState.isPlaying = true;
           this.stateSubject.next({ ...this.currentState });
-
-          source.start(0);
-          this.currentSource = source;
+          console.log('[Audio Communication] Started playing remote audio');
         }
+
+        source.start(startTime);
+        this.currentSource = source;
       } catch (error: any) {
         console.error('[Audio Communication] Error processing audio chunk:', error);
+        console.error('[Audio Communication] Error details:', {
+          errorMessage: error.message,
+          audioDataSize: audioData.byteLength,
+          hasContext: !!this.remoteAudioContext,
+          contextState: this.remoteAudioContext?.state
+        });
       }
     }
 
@@ -370,10 +404,16 @@ export class AudioCommunicationService {
         this.stateSubject.next({ ...this.currentState });
 
         // Send control message
-        await this.webPubSubService.sendControl(
-          this.groupId,
-          this.currentState.isMuted ? 'mute' : 'unmute'
-        );
+        try {
+          if (this.webPubSubService.isConnected()) {
+            await this.webPubSubService.sendControl(
+              this.groupId,
+              this.currentState.isMuted ? 'mute' : 'unmute'
+            );
+          }
+        } catch (error: any) {
+          console.warn('[Audio Communication] Error sending mute control:', error);
+        }
       }
     } catch (error: any) {
       console.error('[Audio Communication] Toggle mute error:', error);
