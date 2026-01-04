@@ -181,9 +181,11 @@ export class WebPubSubService {
               return;
             }
 
-            // Don't play our own audio back
+            // For testing: Allow hearing own audio (set to false in production to prevent echo)
             const currentUser = this.authService.currentUser();
-            if (currentUser && message.senderId === currentUser.id) {
+            const allowOwnAudio = true; // Enable for testing - set to false in production
+            
+            if (currentUser && message.senderId === currentUser.id && !allowOwnAudio) {
               if (shouldLog) {
                 console.log('[Web PubSub] ⏭️ Ignoring own audio message from:', message.senderId);
               }

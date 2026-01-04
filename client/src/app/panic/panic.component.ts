@@ -181,155 +181,49 @@ import { environment } from '../../environments/environment';
             </div>
           </div>
 
-          <!-- Testing Talk Section -->
+          <!-- Testing Talk Section - Single Button -->
           <div class="testing-talk-panel">
-            <div class="testing-header">
-              <h3>Testing Talk</h3>
-              <p class="testing-subtitle">Test real-time 2-way audio communication</p>
-            </div>
+            <h3>Voice Call</h3>
             
-            <!-- Quick Test Button -->
-            <div class="quick-test-section">
+            <select
+              [(ngModel)]="testSelectedContactId"
+              class="contact-select"
+              [disabled]="isInTestCall || contacts.length === 0"
+            >
+              <option value="">Select contact...</option>
+              <option *ngFor="let contact of contacts" [value]="contact.id">
+                {{ contact.username }}
+              </option>
+            </select>
+
+            <div class="call-buttons">
               <button
-                class="quick-test-btn"
-                [class.connected]="isWebPubSubConnected"
-                [class.testing]="isTestingConnection"
-                (click)="testWebPubSubConnection()"
-                [disabled]="isTestingConnection"
+                *ngIf="!isInTestCall"
+                class="btn-call"
+                (click)="callContact()"
+                [disabled]="!testSelectedContactId || contacts.length === 0"
               >
-                <span class="btn-icon">{{ isWebPubSubConnected ? '✅' : isTestingConnection ? '🔄' : '🔌' }}</span>
-                <span class="btn-text">
-                  {{ isTestingConnection ? 'Testing Connection...' : isWebPubSubConnected ? 'Web PubSub Connected!' : 'Test Web PubSub Connection' }}
-                </span>
+                📞 Call
               </button>
-              <p class="connection-status-text" [class.connected]="isWebPubSubConnected" [class.error]="webPubSubConnectionError">
-                {{ webPubSubConnectionError || (isWebPubSubConnected ? 'Ready to make calls!' : 'Click to test connection') }}
-              </p>
-            </div>
-            
-            <div class="testing-controls">
-              <div class="testing-input-group">
-                <label>
-                  Select Contact to Call:
-                  <select
-                    [(ngModel)]="testSelectedContactId"
-                    class="test-contact-select"
-                    [disabled]="isInTestCall || contacts.length === 0"
-                  >
-                    <option value="">-- Select a contact --</option>
-                    <option *ngFor="let contact of contacts" [value]="contact.id">
-                      {{ contact.username }} ({{ contact.id }})
-                    </option>
-                  </select>
-                </label>
-                <p class="testing-hint" *ngIf="contacts.length === 0">
-                  No emergency contacts available. Add contacts by marking someone "Helpful" in chat.
-                </p>
-              </div>
-
-              <!-- Connection Status (Always Visible) -->
-              <div class="testing-status">
-                <div class="status-item">
-                  <span class="status-label">Web PubSub Connection:</span>
-                  <span class="status-value" [class.connected]="isWebPubSubConnected" [class.disconnected]="!isWebPubSubConnected">
-                    <span class="status-indicator" [class.pulse]="isWebPubSubConnected"></span>
-                    {{ isWebPubSubConnected ? '✅ CONNECTED' : '❌ DISCONNECTED' }}
-                  </span>
-                </div>
-                <div class="status-item" *ngIf="webPubSubConnectionError">
-                  <span class="status-label">Error:</span>
-                  <span class="status-value error">{{ webPubSubConnectionError }}</span>
-                </div>
-              </div>
-
-              <!-- Call Status (Only when in call) -->
-              <div class="testing-status" *ngIf="isInTestCall">
-                <div class="status-item">
-                  <span class="status-label">Call Status:</span>
-                  <span class="status-value" [class.active]="isTestCallConnected">
-                    {{ isTestCallConnected ? '✅ CONNECTED' : '📞 CONNECTING...' }}
-                  </span>
-                </div>
-                <div class="status-item" *ngIf="callStatus === 'connected'">
-                  <span class="status-label">Recording:</span>
-                  <span class="status-value" [class.active]="getAudioState().isRecording">
-                    {{ getAudioState().isRecording ? '🔴 RECORDING' : '⚪ IDLE' }}
-                  </span>
-                </div>
-                <div class="status-item" *ngIf="callStatus === 'connected'">
-                  <span class="status-label">Receiving:</span>
-                  <span class="status-value" [class.active]="getAudioState().isPlaying">
-                    {{ getAudioState().isPlaying ? '🔊 PLAYING' : '⚪ IDLE' }}
-                  </span>
-                </div>
-                <div class="status-item">
-                  <span class="status-label">Muted:</span>
-                  <span class="status-value" [class.active]="isMuted()">
-                    {{ isMuted() ? '🔇 YES' : '⚪ NO' }}
-                  </span>
-                </div>
-              </div>
-
-              <div class="testing-buttons">
+              
+              <div *ngIf="isInTestCall" class="call-active">
                 <button
-                  class="test-btn start-call-btn"
-                  (click)="startTestCall()"
-                  [disabled]="!testSelectedContactId || isInTestCall || contacts.length === 0 || !isWebPubSubConnected"
-                >
-                  📞 Start Call
-                </button>
-                <button
-                  class="test-btn alert-all-btn"
-                  (click)="startBroadcastCall()"
-                  [disabled]="isInTestCall || contacts.length === 0 || !isWebPubSubConnected"
-                >
-                  📢 Alert All
-                </button>
-                <button
-                  *ngIf="isInTestCall && callStatus === 'connected'"
-                  class="test-btn record-btn"
+                  class="btn-record"
                   [class.recording]="getAudioState().isRecording"
                   (click)="getAudioState().isRecording ? stopTestRecording() : startTestRecording()"
                 >
-                  {{ getAudioState().isRecording ? '⏹️ Stop Recording' : '🎤 Start Recording' }}
+                  {{ getAudioState().isRecording ? '⏹️ Stop' : '🎤 Record' }}
                 </button>
-                <button
-                  class="test-btn mute-btn"
-                  (click)="toggleTestMute()"
-                  [disabled]="!isInTestCall || callStatus !== 'connected'"
-                >
-                  {{ isMuted() ? '🔊 Unmute' : '🔇 Mute' }}
+                <button class="btn-mute" (click)="toggleTestMute()">
+                  {{ isMuted() ? '🔊' : '🔇' }}
                 </button>
-                <button
-                  class="test-btn end-call-btn"
-                  (click)="endTestCall()"
-                  [disabled]="!isInTestCall"
-                >
-                  ❌ End Call
-                </button>
+                <button class="btn-end" (click)="endTestCall()">❌ End</button>
               </div>
-              
-              <!-- Call Status -->
-              <div class="call-status" *ngIf="isInTestCall">
-                <p class="status-text" [class.calling]="callStatus === 'calling'" [class.connected]="callStatus === 'connected'" [class.declined]="callStatus === 'declined'" [class.no-answer]="callStatus === 'no_answer'">
-                  <span *ngIf="callStatus === 'calling'">📞 Calling...</span>
-                  <span *ngIf="callStatus === 'connected'">✅ Connected</span>
-                  <span *ngIf="callStatus === 'declined'">❌ Declined</span>
-                  <span *ngIf="callStatus === 'no_answer'">⏱️ No Answer</span>
-                </p>
-              </div>
+            </div>
 
-              <div class="testing-info" *ngIf="!isInTestCall">
-                <p class="info-text">
-                  💡 <strong>How to test:</strong><br>
-                  1. Select a contact from your emergency contacts<br>
-                  2. Click "Start Call" to begin<br>
-                  3. Speak into your microphone<br>
-                  4. The selected contact will hear your audio in real-time<br>
-                  5. Click "End Call" when done<br><br>
-                  <strong>Note:</strong> The other user must also be on the Panic Mode page and start a call to you for 2-way communication.
-                </p>
-              </div>
+            <div class="status-simple" *ngIf="isInTestCall">
+              <span [class.active]="getAudioState().isRecording">🔴 {{ getAudioState().isRecording ? 'Recording' : 'Idle' }}</span>
+              <span [class.active]="getAudioState().isPlaying">🔊 {{ getAudioState().isPlaying ? 'Playing' : 'Idle' }}</span>
             </div>
           </div>
         </div>
@@ -916,14 +810,98 @@ import { environment } from '../../environments/environment';
       background: var(--tiger-orange);
       animation: pulse 1.5s infinite;
     }
-    /* Testing Talk Panel Styles */
+    /* Testing Talk Panel Styles - Simplified */
+    /* Testing Talk Panel - Simplified */
     .testing-talk-panel {
       margin-top: 2rem;
       background: var(--card-gradient);
       border: 1px solid var(--border-color);
-      padding: 2rem;
-      border-radius: 16px;
-      box-shadow: 0 10px 40px var(--shadow-lg);
+      padding: 1.5rem;
+      border-radius: 12px;
+      text-align: center;
+    }
+    .testing-talk-panel h3 {
+      margin: 0 0 1rem 0;
+      font-size: 1.2rem;
+      color: var(--text-primary);
+    }
+    .contact-select {
+      width: 100%;
+      max-width: 300px;
+      padding: 0.75rem;
+      border-radius: 8px;
+      border: 2px solid var(--border-color);
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      font-size: 1rem;
+      margin-bottom: 1rem;
+      cursor: pointer;
+    }
+    .call-buttons {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+      margin-bottom: 1rem;
+    }
+    .btn-call {
+      width: 100%;
+      max-width: 300px;
+      padding: 1rem 2rem;
+      border-radius: 8px;
+      border: none;
+      background: var(--button-gradient);
+      color: white;
+      font-size: 1.1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-call:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    }
+    .btn-call:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .call-active {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .btn-record, .btn-mute, .btn-end {
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      border: none;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-record {
+      background: var(--green-accent);
+      color: white;
+    }
+    .btn-record.recording {
+      background: var(--red-accent);
+    }
+    .btn-mute {
+      background: var(--gray-accent);
+      color: var(--text-primary);
+    }
+    .btn-end {
+      background: var(--red-accent);
+      color: white;
+    }
+    .status-simple {
+      display: flex;
+      gap: 1.5rem;
+      justify-content: center;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+    .status-simple span.active {
+      color: var(--green-accent);
+      font-weight: 600;
     }
     .quick-test-section {
       margin-bottom: 2rem;
@@ -2159,8 +2137,8 @@ export class PanicComponent implements OnInit, OnDestroy {
     }
   }
 
-  // Testing Talk Methods
-  async startTestCall(): Promise<void> {
+  // Single button that does everything: connect → call → start recording
+  async callContact(): Promise<void> {
     if (!this.testSelectedContactId || this.isInTestCall) {
       return;
     }
@@ -2168,12 +2146,7 @@ export class PanicComponent implements OnInit, OnDestroy {
     try {
       const currentUser = this.authService.currentUser();
       if (!currentUser || !currentUser.id) {
-        this.toastService.show('You must be logged in to test calls', 'error');
-        return;
-      }
-
-      if (!this.isWebPubSubConnected) {
-        this.toastService.show('Please connect to Web PubSub first', 'error');
+        this.toastService.show('You must be logged in', 'error');
         return;
       }
 
@@ -2184,19 +2157,39 @@ export class PanicComponent implements OnInit, OnDestroy {
         return;
       }
 
-      // Generate call ID
+      this.toastService.show(`Connecting to ${selectedContact.username}...`, 'info');
+
+      // Step 1: Connect to Web PubSub if not connected
+      if (!this.isWebPubSubConnected) {
+        try {
+          await this.panicCallService.connect(currentUser.id);
+          // Wait a bit for connection to establish
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          this.isWebPubSubConnected = this.panicCallService.isConnectedToPubSub();
+          
+          if (!this.isWebPubSubConnected) {
+            throw new Error('Failed to connect to Web PubSub');
+          }
+        } catch (error: any) {
+          console.error('[Testing Talk] Connection error:', error);
+          this.toastService.show('Failed to connect. Please try again.', 'error');
+          return;
+        }
+      }
+
+      // Step 2: Generate call ID and set up call
       this.currentCallId = `call_${Date.now()}_${currentUser.id}`;
       this.isCaller = true;
       this.callStatus = 'calling';
       this.isInTestCall = true;
       
-      // Join call group
+      // Step 3: Join call group
       await this.panicCallService.joinCallGroup(this.currentCallId);
       
-      // Initialize audio communication with Web PubSub
+      // Step 4: Initialize audio communication
       await this.audioCommService.initialize(currentUser.id, this.testSelectedContactId);
       
-      // Send incoming call notification
+      // Step 5: Send incoming call notification
       await this.panicCallService.sendIncomingCall(
         this.currentCallId,
         this.testSelectedContactId,
@@ -2204,8 +2197,15 @@ export class PanicComponent implements OnInit, OnDestroy {
         'single'
       );
       
-      // Start recording automatically when call is accepted
-      // (Will be handled when call_accept signal is received)
+      // Step 6: Start recording immediately (direct call, no acceptance needed)
+      try {
+        await this.audioCommService.startRecording();
+        this.callStatus = 'connected';
+        this.toastService.show(`Connected to ${selectedContact.username}`, 'success');
+      } catch (error) {
+        console.error('[Testing Talk] Error starting recording:', error);
+        this.toastService.show('Call started but recording failed', 'error');
+      }
       
       this.toastService.show(`Calling ${selectedContact.username}...`, 'info');
       console.log('[Testing Talk] Call initiated');
