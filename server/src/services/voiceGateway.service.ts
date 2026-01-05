@@ -169,20 +169,21 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     console.log(`[Voice Gateway] ✅ New connection: userId=${userId}, callId=${callId}`);
     console.log(`[Voice Gateway] 📊 Connection details: origin=${req.headers.origin || 'none'}, path=${pathname}, fullURL=${req.url}`);
 
-    // Store connection metadata
+    // CRITICAL FIX: Normalize callId FIRST before storing connection metadata
+    // This ensures consistency between connection metadata and room lookup
+    const normalizedCallId = callId.trim();
+    
+    // Store connection metadata with NORMALIZED callId
     const connId = `${userId}-${Date.now()}`;
     connections.set(ws, {
       connId,
       userId,
-      callId,
+      callId: normalizedCallId, // CRITICAL: Store normalized callId
       connectedAt: Date.now(),
       packetsRelayed: 0,
       packetsReceived: 0,
       lastStatsLog: Date.now(),
     });
-
-    // CRITICAL FIX: Normalize callId to ensure consistency (remove whitespace, lowercase if needed)
-    const normalizedCallId = callId.trim();
     
     // Join room
     if (!rooms.has(normalizedCallId)) {
@@ -202,11 +203,7 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       }
     }
     
-    // CRITICAL FIX: Update connection metadata with normalized callId
-    const conn = connections.get(ws);
-    if (conn) {
-      conn.callId = normalizedCallId;
-    }
+    // Connection metadata already has normalized callId (set above)
     
     rooms.get(normalizedCallId)!.add(ws);
 
@@ -339,10 +336,30 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
 
       // Relay to all other connections in the same room
       // CRITICAL: Exclude sender (ws) to prevent loopback
-      const room = rooms.get(conn.callId);
+      // CRITICAL FIX: Use normalized callId (already stored in conn.callId)
+      const roomCallId = conn.callId; // This is already normalized
+      let room = rooms.get(roomCallId);
+      
+      // CRITICAL FIX: If room not found, try to find similar room (callId format mismatch)
       if (!room) {
-        console.warn(`[Voice Gateway] ⚠️ No room found for callId: ${conn.callId}`);
-        return;
+        console.error(`[Voice Gateway] ❌ CRITICAL: No room found for callId: ${roomCallId}`);
+        console.error(`[Voice Gateway] ❌ Available rooms:`, Array.from(rooms.keys()).join(', '));
+        console.error(`[Voice Gateway] ❌ Connection callId: ${conn.callId}, userId: ${conn.userId}`);
+        
+        // Try to find room with similar callId
+        for (const [existingRoomId, roomSet] of rooms.entries()) {
+          if (existingRoomId.includes(roomCallId) || roomCallId.includes(existingRoomId)) {
+            console.warn(`[Voice Gateway] 🔍 Found similar room: ${existingRoomId} (searching for ${roomCallId})`);
+            room = roomSet;
+            console.log(`[Voice Gateway] 🔧 Using similar room ${existingRoomId} for relay`);
+            break;
+          }
+        }
+        
+        if (!room) {
+          console.error(`[Voice Gateway] ❌ No room found even after similarity search`);
+          return;
+        }
       }
 
       const roomSize = room.size;
