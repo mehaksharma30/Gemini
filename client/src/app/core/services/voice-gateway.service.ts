@@ -112,16 +112,14 @@ export class VoiceGatewayService {
     this.shouldReconnect = true;
     this.reconnectAttempts = 0;
 
-    return this.attemptConnection(resolve, reject);
+    return this.attemptConnection();
   }
 
   /**
    * Attempt WebSocket connection with retry logic
    */
-  private attemptConnection(resolve?: () => void, reject?: (error: Error) => void): Promise<void> {
-    return new Promise((innerResolve, innerReject) => {
-      const finalResolve = resolve || innerResolve;
-      const finalReject = reject || innerReject;
+  private attemptConnection(): Promise<void> {
+    return new Promise((resolve, reject) => {
 
       try {
         // Build WebSocket URL
@@ -197,9 +195,7 @@ export class VoiceGatewayService {
             }, 1000);
           }
           
-          if (finalResolve) {
-            finalResolve();
-          }
+          resolve();
         };
 
         this.ws.onmessage = async (event) => {
@@ -294,8 +290,8 @@ export class VoiceGatewayService {
           this.connectedSubject.next(false);
           
           // Don't reject immediately - let onclose handle reconnection
-          if (finalReject && !this.isReconnecting) {
-            finalReject(new Error('WebSocket connection failed'));
+          if (!this.isReconnecting) {
+            reject(new Error('WebSocket connection failed'));
           }
         };
 
@@ -324,9 +320,7 @@ export class VoiceGatewayService {
       } catch (error: any) {
         console.error('[Voice Gateway] Connection error:', error);
         this.connectedSubject.next(false);
-        if (finalReject) {
-          finalReject(error);
-        }
+        reject(error);
         
         // Schedule reconnection on error
         if (this.shouldReconnect) {
