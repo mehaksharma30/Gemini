@@ -27,8 +27,21 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     clientTracking: true,
     verifyClient: (info: { origin?: string; req: any; secure: boolean }) => {
       // Log connection attempts for debugging
-      console.log(`[Voice Gateway] Connection attempt from ${info.origin || 'unknown origin'}, path: ${info.req.url}`);
-      return true; // Accept all connections (CORS is handled separately)
+      const pathname = info.req.url?.split('?')[0] || '';
+      const origin = info.origin || 'unknown origin';
+      console.log(`[Voice Gateway] 🔄 Connection attempt from ${origin}`);
+      console.log(`[Voice Gateway] Path: ${pathname}, Full URL: ${info.req.url}`);
+      console.log(`[Voice Gateway] Upgrade header: ${info.req.headers.upgrade}`);
+      console.log(`[Voice Gateway] Connection header: ${info.req.headers.connection}`);
+      
+      // Accept connections to both /voice-gateway and /voice-gateway/
+      if (pathname === '/voice-gateway' || pathname === '/voice-gateway/') {
+        console.log(`[Voice Gateway] ✅ Accepting connection to ${pathname}`);
+        return true;
+      }
+      
+      console.warn(`[Voice Gateway] ❌ Rejected connection to invalid path: ${pathname}`);
+      return false;
     }
   });
 

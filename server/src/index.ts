@@ -81,15 +81,6 @@ const corsOptions = {
 // Apply CORS middleware
 app.use(cors(corsOptions));
 
-// Handle WebSocket upgrade requests - ensure they're not blocked
-app.use((req, res, next) => {
-  // Allow WebSocket upgrade requests to pass through
-  if (req.headers.upgrade === 'websocket') {
-    return next();
-  }
-  next();
-});
-
 // Socket.IO CORS configuration
 const io = new Server(httpServer, {
   cors: {
