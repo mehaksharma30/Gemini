@@ -395,3 +395,5 @@ const connections = new Map<WebSocket, {
 2. `client/src/app/core/services/voice-gateway.service.ts` - Singleton guard, diagnostics, packet counters
 3. `client/src/app/core/services/audio-communication.service.ts` - Mic track diagnostics
 
+
+

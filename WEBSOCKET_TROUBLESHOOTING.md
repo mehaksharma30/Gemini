@@ -85,3 +85,5 @@ Once WebSocket is enabled:
 3. Successful connections should show: `[Voice Gateway] ✅ New connection: userId=..., callId=...`
 4. Frontend should connect successfully without errors
 
+
+

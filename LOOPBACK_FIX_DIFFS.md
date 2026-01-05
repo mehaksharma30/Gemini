@@ -315,3 +315,5 @@ const PAYLOAD_SIZE = 640; // SAMPLES_PER_FRAME * 2 (Int16 = 2 bytes)
 1. `server/src/services/voiceGateway.service.ts` - Add senderId to packets
 2. `client/src/app/core/services/voice-gateway.service.ts` - Ignore self packets, single connection guard, logging
 
+
+

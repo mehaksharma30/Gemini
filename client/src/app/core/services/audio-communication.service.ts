@@ -75,6 +75,10 @@ export class AudioCommunicationService {
   private targetUserId: string = '';
   private seqCounter: number = 0;
   private txAcc: Float32Array = new Float32Array(0); // Transmit accumulator
+  
+  // Diagnostic logging interval
+  private micStatsLogInterval: any = null;
+  private lastPacketsSentCount: number = 0;
 
   constructor() {
     // Subscribe to Voice Gateway connection status
@@ -287,6 +291,9 @@ export class AudioCommunicationService {
       this.currentState.isRecording = true;
       this.stateSubject.next({ ...this.currentState });
 
+      // Start diagnostic logging interval (once per second)
+      this.startMicStatsLogging();
+
       console.log('[Audio Communication] Recording started');
     } catch (error: any) {
       console.error('[Audio Communication] Start recording error:', error);
@@ -324,6 +331,9 @@ export class AudioCommunicationService {
 
       // Clear accumulator
       this.txAcc = new Float32Array(0);
+
+      // Stop diagnostic logging
+      this.stopMicStatsLogging();
 
       this.currentState.isRecording = false;
       this.stateSubject.next({ ...this.currentState });
@@ -369,7 +379,8 @@ export class AudioCommunicationService {
       }
       
       // Also update Voice Gateway mic mute state (for boolean gate in sendAudioPacket)
-      await this.voiceGatewayService.toggleMicMute();
+      // CRITICAL: Use setMicMuted() instead of toggleMicMute() to avoid double-toggle
+      await this.voiceGatewayService.setMicMuted(this.currentState.isMuted);
     } catch (error: any) {
       console.error('[Audio Communication] Toggle mute error:', error);
       this.errorSubject.next(error.message || 'Failed to toggle mute');
@@ -413,6 +424,9 @@ export class AudioCommunicationService {
         this.audioContext = null;
       }
       
+      // Stop diagnostic logging
+      this.stopMicStatsLogging();
+      
       this.callId = '';
       this.userId = '';
       this.targetUserId = '';
@@ -439,6 +453,51 @@ export class AudioCommunicationService {
    */
   getState(): AudioStreamState {
     return { ...this.currentState };
+  }
+  
+  /**
+   * Start diagnostic logging for mic state (once per second)
+   */
+  private startMicStatsLogging(): void {
+    // Clear any existing interval
+    if (this.micStatsLogInterval) {
+      clearInterval(this.micStatsLogInterval);
+      this.micStatsLogInterval = null;
+    }
+    
+    // Initialize last count (read before any reset happens)
+    this.lastPacketsSentCount = this.voiceGatewayService.getPacketsSentCount();
+    
+    // Start logging interval (once per second)
+    // Note: This runs independently from VoiceGatewayService.logStats(), so we track the difference ourselves
+    // The packetsSentCount in VoiceGatewayService is reset in getCurrentStats() (called in logStats()),
+    // so we need to read it and calculate the difference before it gets reset
+    this.micStatsLogInterval = setInterval(() => {
+      // Read current count (this may be reset by VoiceGatewayService.logStats() if it runs first)
+      const currentPacketsSent = this.voiceGatewayService.getPacketsSentCount();
+      
+      // Calculate packets sent in the last second
+      // If currentPacketsSent < lastPacketsSentCount, it means the counter was reset, so use currentPacketsSent
+      const packetsSentPerSec = currentPacketsSent < this.lastPacketsSentCount 
+        ? currentPacketsSent 
+        : currentPacketsSent - this.lastPacketsSentCount;
+      
+      this.lastPacketsSentCount = currentPacketsSent;
+      
+      // Log: micTrack.enabled, isMuted, voiceGateway.isMicMuted, packetsSent/sec
+      console.log(`[Audio Communication] 🎤 Mic Stats: micTrack.enabled=${this.micTrack?.enabled ?? 'null'}, isMuted=${this.currentState.isMuted}, voiceGateway.isMicMuted=${this.voiceGatewayService.getMicMutedState()}, packetsSent/sec=${packetsSentPerSec}`);
+    }, 1000);
+  }
+  
+  /**
+   * Stop diagnostic logging for mic state
+   */
+  private stopMicStatsLogging(): void {
+    if (this.micStatsLogInterval) {
+      clearInterval(this.micStatsLogInterval);
+      this.micStatsLogInterval = null;
+    }
+    this.lastPacketsSentCount = 0;
   }
 }
 

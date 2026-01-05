@@ -561,11 +561,12 @@ export class VoiceGatewayService {
   }
   
   /**
-   * Toggle microphone mute (SOFT MUTE - boolean gate only)
-   * IMPORTANT: Only toggles boolean to stop sending packets. Does NOT stop tracks or touch audioCtx lifecycle.
+   * Set microphone mute state (SOFT MUTE - boolean gate only)
+   * IMPORTANT: Only sets boolean to stop sending packets. Does NOT stop tracks or touch audioCtx lifecycle.
+   * @param muted - true to mute, false to unmute
    */
-  async toggleMicMute(): Promise<void> {
-    this.isMicMuted = !this.isMicMuted;
+  async setMicMuted(muted: boolean): Promise<void> {
+    this.isMicMuted = muted;
     
     // Log mute state
     console.log(`[Voice Gateway] MicMuted=${this.isMicMuted}`);
@@ -635,6 +636,22 @@ export class VoiceGatewayService {
       packetsPlayedPerSec,
       bufferDepth: this.jitterBuffer.size,
     };
+  }
+  
+  /**
+   * Get current packets sent count (for diagnostic logging)
+   * Note: This returns the current count. The count is reset in getCurrentStats() which is called in logStats().
+   * For accurate per-second calculation, track the difference between calls.
+   */
+  getPacketsSentCount(): number {
+    return this.packetsSentCount;
+  }
+  
+  /**
+   * Get current mic mute state (for diagnostic logging)
+   */
+  getMicMutedState(): boolean {
+    return this.isMicMuted;
   }
   
   /**
