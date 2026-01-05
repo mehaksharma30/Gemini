@@ -11,6 +11,7 @@ import { SpeechToTextService } from '../core/services/speech-to-text.service';
 import { AuthService } from '../core/services/auth.service';
 import { PanicCallService, IncomingCall } from '../core/services/panic-call.service';
 import { AudioCommunicationService } from '../core/services/audio-communication.service';
+import { VoiceGatewayService } from '../core/services/voice-gateway.service';
 import { environment } from '../../environments/environment';
 
 @Component({
@@ -1321,6 +1322,7 @@ export class PanicComponent implements OnInit, OnDestroy {
   private authService = inject(AuthService);
   private panicCallService = inject(PanicCallService);
   private audioCommService = inject(AudioCommunicationService);
+  private voiceGatewayService = inject(VoiceGatewayService);
   private cdr = inject(ChangeDetectorRef);
 
   message = '';
@@ -1341,9 +1343,9 @@ export class PanicComponent implements OnInit, OnDestroy {
   incomingCall: IncomingCall | null = null;
   showIncomingCallModal: boolean = false;
   
-  // Web PubSub connection status
-  isWebPubSubConnected: boolean = false;
-  webPubSubConnectionError: string = '';
+  // Voice Gateway connection status (for audio)
+  isVoiceGatewayConnected: boolean = false;
+  voiceGatewayConnectionError: string = '';
   isTestingConnection: boolean = false;
   private subscriptions: any[] = [];
   
@@ -1366,17 +1368,8 @@ export class PanicComponent implements OnInit, OnDestroy {
   }
   
   setupCallSubscriptions(): void {
-    // Subscribe to PubSub connection status
-    const connSub = this.panicCallService.connected$.subscribe(connected => {
-      this.isWebPubSubConnected = connected;
-      if (!connected) {
-        this.webPubSubConnectionError = 'Disconnected';
-      } else {
-        this.webPubSubConnectionError = '';
-      }
-      this.cdr.detectChanges();
-    });
-    this.subscriptions.push(connSub);
+    // Note: Voice Gateway connection is managed by audioCommService
+    // We keep panicCallService for call signaling (incoming calls, accept/decline)
     
     // Subscribe to incoming calls
     const incomingSub = this.panicCallService.incomingCall$.subscribe(call => {
@@ -2122,43 +2115,49 @@ export class PanicComponent implements OnInit, OnDestroy {
     this.panicCallService.disconnect().catch(console.error);
   }
 
-  async testWebPubSubConnection(): Promise<void> {
+  async testVoiceGatewayConnection(): Promise<void> {
     this.isTestingConnection = true;
-    this.webPubSubConnectionError = '';
+    this.voiceGatewayConnectionError = '';
     
     try {
       const currentUser = this.authService.currentUser();
       if (!currentUser || !currentUser.id) {
-        this.webPubSubConnectionError = 'You must be logged in';
-        this.isWebPubSubConnected = false;
+        this.voiceGatewayConnectionError = 'You must be logged in';
+        this.isVoiceGatewayConnected = false;
         this.isTestingConnection = false;
         this.toastService.show('❌ You must be logged in to test connection', 'error');
         return;
       }
 
-      console.log('[Testing Talk] Testing Web PubSub connection...');
+      console.log('[Testing Talk] Testing Voice Gateway connection...');
       console.log('[Testing Talk] Current user ID:', currentUser.id);
       
-      await this.panicCallService.connect(currentUser.id);
+      // Test connection with a dummy call ID
+      const testCallId = `test_${Date.now()}`;
+      
+      await this.voiceGatewayService.connect(testCallId, currentUser.id);
       
       // Wait for connection
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      const isConnected = this.panicCallService.isConnectedToPubSub();
-      this.isWebPubSubConnected = isConnected;
+      const isConnected = this.voiceGatewayService.isConnected();
+      this.isVoiceGatewayConnected = isConnected;
+      
+      // Disconnect test connection
+      await this.voiceGatewayService.disconnect();
       
       if (isConnected) {
-        this.webPubSubConnectionError = '';
-        this.toastService.show('✅ Web PubSub connection successful!', 'success');
-        console.log('[Testing Talk] Web PubSub connection test: SUCCESS');
+        this.voiceGatewayConnectionError = '';
+        this.toastService.show('✅ Voice Gateway connection successful!', 'success');
+        console.log('[Testing Talk] Voice Gateway connection test: SUCCESS');
       } else {
-        throw new Error('Connection failed. Check backend and Azure Web PubSub configuration.');
+        throw new Error('Connection failed. Make sure Voice Gateway server is running on port 8080.');
       }
     } catch (error: any) {
-      console.error('[Testing Talk] Web PubSub connection test failed:', error);
-      this.isWebPubSubConnected = false;
-      this.webPubSubConnectionError = error.message || 'Connection test failed. Check console for details.';
-      this.toastService.show(`❌ Connection failed: ${this.webPubSubConnectionError}`, 'error');
+      console.error('[Testing Talk] Voice Gateway connection test failed:', error);
+      this.isVoiceGatewayConnected = false;
+      this.voiceGatewayConnectionError = error.message || 'Connection test failed. Check console for details.';
+      this.toastService.show(`❌ Connection failed: ${this.voiceGatewayConnectionError}`, 'error');
     } finally {
       this.isTestingConnection = false;
       this.cdr.detectChanges();
@@ -2187,45 +2186,31 @@ export class PanicComponent implements OnInit, OnDestroy {
 
       this.toastService.show(`Connecting to ${selectedContact.username}...`, 'info');
 
-      // Step 1: Connect to Web PubSub if not connected
-      if (!this.isWebPubSubConnected) {
-        try {
-          await this.panicCallService.connect(currentUser.id);
-          // Wait a bit for connection to establish
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          this.isWebPubSubConnected = this.panicCallService.isConnectedToPubSub();
-          
-          if (!this.isWebPubSubConnected) {
-            throw new Error('Failed to connect to Web PubSub');
-          }
-        } catch (error: any) {
-          console.error('[Testing Talk] Connection error:', error);
-          this.toastService.show('Failed to connect. Please try again.', 'error');
-          return;
-        }
-      }
-
-      // Step 2: Generate call ID and set up call
+      // Step 1: Generate call ID and set up call
       this.currentCallId = `call_${Date.now()}_${currentUser.id}`;
       this.isCaller = true;
       this.callStatus = 'calling';
       this.isInTestCall = true;
       
-      // Step 3: Join call group
-      await this.panicCallService.joinCallGroup(this.currentCallId);
-      
-      // Step 4: Initialize audio communication
+      // Step 2: Initialize audio communication (Voice Gateway)
       await this.audioCommService.initialize(currentUser.id, this.testSelectedContactId);
       
-      // Step 5: Send incoming call notification
-      await this.panicCallService.sendIncomingCall(
-        this.currentCallId,
-        this.testSelectedContactId,
-        currentUser.username || 'Unknown',
-        'single'
-      );
+      // Step 3: Connect to panic call service for signaling (optional - for incoming call notifications)
+      // Note: Voice Gateway handles audio, panicCallService handles call signaling
+      try {
+        await this.panicCallService.connect(currentUser.id);
+        await this.panicCallService.joinCallGroup(this.currentCallId);
+        await this.panicCallService.sendIncomingCall(
+          this.currentCallId,
+          this.testSelectedContactId,
+          currentUser.username || 'Unknown',
+          'single'
+        );
+      } catch (error: any) {
+        console.warn('[Testing Talk] Call signaling setup failed (audio will still work):', error);
+      }
       
-      // Step 6: Start recording immediately (direct call, no acceptance needed)
+      // Step 4: Start recording immediately (direct call, no acceptance needed)
       try {
         await this.audioCommService.startRecording();
         this.callStatus = 'connected';
@@ -2256,10 +2241,7 @@ export class PanicComponent implements OnInit, OnDestroy {
         return;
       }
 
-      if (!this.isWebPubSubConnected) {
-        this.toastService.show('Please connect to Web PubSub first', 'error');
-        return;
-      }
+      // Voice Gateway connection is handled automatically by audioCommService.initialize()
 
       // Generate call ID
       this.currentCallId = `call_${Date.now()}_${currentUser.id}`;
@@ -2643,11 +2625,12 @@ export class PanicComponent implements OnInit, OnDestroy {
       this.currentCallId = `call_${Date.now()}_${currentUser.id}`;
       this.isCaller = true;
       
-      // Step 4: Connect to panic call service if needed
-      if (!this.isWebPubSubConnected) {
+      // Step 4: Connect to panic call service for signaling (optional - Voice Gateway handles audio)
+      try {
         await this.panicCallService.connect(currentUser.id);
         await new Promise(resolve => setTimeout(resolve, 1000));
-        this.isWebPubSubConnected = this.panicCallService.isConnectedToPubSub();
+      } catch (error: any) {
+        console.warn('[Testing Talk] Call signaling setup failed (audio will still work):', error);
       }
       
       // Step 5: Join call group

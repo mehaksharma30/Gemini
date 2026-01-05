@@ -33,9 +33,9 @@ export const getConversations = async (req: Request, res: Response) => {
         });
 
         return {
-          conversationId: conv._id,
+          conversationId: conv._id.toString(),
           otherParticipant: {
-            id: otherUser?._id,
+            id: otherUser?._id ? (otherUser._id as mongoose.Types.ObjectId).toString() : '',
             username: otherUser?.username || 'Unknown User',
           },
           lastMessage: conv.lastMessage,
@@ -87,9 +87,9 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
     return res.json({
       success: true,
       data: {
-        conversationId: conversation._id,
+        conversationId: conversation._id.toString(),
         otherParticipant: {
-          id: otherUser._id,
+          id: (otherUser._id as mongoose.Types.ObjectId).toString(),
           username: otherUser.username,
         },
       },

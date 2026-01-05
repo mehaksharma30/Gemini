@@ -1,4 +1,5 @@
 import { Routes } from '@angular/router';
+import { VoiceGatewayComponent } from './voice-gateway/voice-gateway.component';
 import { authGuard, guestGuard } from './core/guards/auth.guard';
 
 export const routes: Routes = [
@@ -80,6 +81,11 @@ export const routes: Routes = [
   {
     path: 'alerts',
     loadComponent: () => import('./alerts/alerts.component').then(m => m.AlertsComponent),
+    canActivate: [authGuard],
+  },
+  {
+    path: 'voice-gateway',
+    component: VoiceGatewayComponent,
     canActivate: [authGuard],
   },
   {
