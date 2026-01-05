@@ -342,7 +342,18 @@ export class VoiceGatewayService {
           });
           
           this.connectedSubject.next(false);
+          
+          // CRITICAL: Clean up playback state but do NOT close audioContext
+          // AudioContext should remain open for reuse
           this.cleanupPlayback();
+          
+          // CRITICAL: Remove handlers to prevent duplicate handlers on reconnect
+          if (this.ws) {
+            this.ws.onopen = null;
+            this.ws.onmessage = null;
+            this.ws.onerror = null;
+            this.ws.onclose = null;
+          }
           
           // Attempt reconnection if not a clean close and we should reconnect
           if (this.shouldReconnect && event.code !== 1000 && !event.wasClean) {
