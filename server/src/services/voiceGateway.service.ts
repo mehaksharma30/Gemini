@@ -281,17 +281,19 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       // INSTRUMENTATION: Increment per-user recv count (packets received FROM client, not relayed)
       conn.packetsReceived++;
       
-      // INSTRUMENTATION: Log every 100 received packets per user with userId, callId, roomSize
-      if (conn.packetsReceived % 100 === 0) {
+      // CRITICAL: Log first 100 received packets to diagnose relay issues
+      if (conn.packetsReceived <= 100) {
+        const room = rooms.get(conn.callId);
+        const roomSize = room ? room.size : 0;
+        const participants = room ? Array.from(room).map(ws => {
+          const c = connections.get(ws);
+          return c ? `${c.userId}(readyState=${ws.readyState})` : 'unknown';
+        }).filter(Boolean) : [];
+        console.log(`[Voice Gateway] 🎤 Received packet #${conn.packetsReceived} from ${conn.userId} in call ${conn.callId}, size: ${Buffer.isBuffer(data) ? data.length : 'unknown'}, roomSize: ${roomSize}, participants: [${participants.join(', ')}]`);
+      } else if (conn.packetsReceived % 100 === 0) {
         const room = rooms.get(conn.callId);
         const roomSize = room ? room.size : 0;
         console.log(`[Voice Gateway] ${conn.userId} received ${conn.packetsReceived} packets from client (callId=${conn.callId}, roomSize=${roomSize})`);
-      }
-      
-      // DIAGNOSTIC: Log first few audio packets
-      if (conn.packetsReceived <= 3) {
-        const roomSize = rooms.get(conn.callId)?.size || 0;
-        console.log(`[Voice Gateway] 🎤 Received audio packet #${conn.packetsReceived} from ${conn.userId} in call ${conn.callId}, size: ${Buffer.isBuffer(data) ? data.length : 'unknown'}, roomSize: ${roomSize}`);
       }
 
       // Convert to Buffer if needed
@@ -364,8 +366,18 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
 
       const roomSize = room.size;
       
+      // CRITICAL FIX: Always log room state for first 100 packets (not just when roomSize < 2)
+      if (conn.packetsReceived <= 100) {
+        const participants = Array.from(room).map(ws => {
+          const c = connections.get(ws);
+          return c ? `${c.userId}(readyState=${ws.readyState}, callId=${c.callId})` : 'unknown';
+        }).filter(Boolean);
+        console.log(`[Voice Gateway] 📊 Room state: callId=${conn.callId}, roomSize=${roomSize}, participants: [${participants.join(', ')}]`);
+      }
+      
       // CRITICAL FIX: Handle room size < 2 - try to find receiver in other rooms with similar callId
       if (roomSize < 2) {
+        // ALWAYS log this (not rate-limited) to diagnose
         console.warn(`[Voice Gateway] ⚠️ Room ${conn.callId} has only ${roomSize} participant(s) - no receiver! User ${conn.userId} is sending but no one to receive.`);
         const participants = Array.from(room).map(ws => {
           const c = connections.get(ws);
@@ -412,8 +424,8 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       const recipients: string[] = [];
       const skippedRecipients: string[] = [];
       
-      // INSTRUMENTATION: Log room details before relay (ALWAYS log first 50 packets to diagnose)
-      if (conn.packetsRelayed < 50) {
+      // CRITICAL: ALWAYS log first 100 relay attempts to diagnose why packets aren't being relayed
+      if (conn.packetsRelayed < 100) {
         const allParticipants = Array.from(room).map(roomWs => {
           const c = connections.get(roomWs);
           const isSender = roomWs === ws;
@@ -421,7 +433,7 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         }).filter(Boolean);
         console.log(`[Voice Gateway] 🔄 Relay attempt #${conn.packetsRelayed + 1}: sender=${conn.userId}, roomSize=${roomSize}, participants: [${allParticipants.join(', ')}]`);
       } else if (conn.packetsRelayed % 100 === 0) {
-        // Log every 100th packet after first 50
+        // Log every 100th packet after first 100
         const allParticipants = Array.from(room).map(roomWs => {
           const c = connections.get(roomWs);
           return c ? `${c.userId}(readyState=${roomWs.readyState})` : 'unknown';
@@ -516,6 +528,10 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         
         try {
           // CRITICAL: Send packet - this is where the actual relay happens
+          // CRITICAL: Log EVERY send attempt for first 100 packets
+          if (conn.packetsRelayed < 100) {
+            console.log(`[Voice Gateway] 📤 Sending packet to ${otherConn.userId}: readyState=${wsReadyState}, packetSize=${packetWithSender.length} bytes`);
+          }
           otherWs.send(packetWithSender);
           recipients.push(otherConn.userId);
           relayed++;
@@ -525,9 +541,13 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
             console.log(`[Voice Gateway] ✅ First successful relay: ${conn.userId} -> ${otherConn.userId}, packetSize=${packetWithSender.length} bytes, callId=${conn.callId}`);
           } else if (relayed > 0 && (conn.packetsRelayed + relayed) % 100 === 0) {
             console.log(`[Voice Gateway] ✅ Relayed ${conn.packetsRelayed + relayed} packets: ${conn.userId} -> ${otherConn.userId}`);
+          } else if (conn.packetsRelayed < 10) {
+            // Log first 10 successful sends
+            console.log(`[Voice Gateway] ✅ Sent packet #${conn.packetsRelayed + relayed} to ${otherConn.userId}`);
           }
         } catch (error: any) {
-          console.error(`[Voice Gateway] ❌ Error sending packet to ${otherConn.userId}:`, error.message, `CallId: ${otherConn.callId}`);
+          // CRITICAL: Always log send errors (not rate-limited)
+          console.error(`[Voice Gateway] ❌ Error sending packet to ${otherConn.userId}:`, error.message, `CallId: ${otherConn.callId}, readyState: ${wsReadyState}`);
           skippedRecipients.push(`${otherConn.userId}(error: ${error.message})`);
         }
       });
