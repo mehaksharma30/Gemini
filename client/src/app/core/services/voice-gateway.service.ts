@@ -269,10 +269,28 @@ export class VoiceGatewayService {
         this.onmessageHandlerAttached = true;
         
         this.ws.onmessage = async (event) => {
+          // CRITICAL: Log EVERY message received to diagnose why recv/sec=0
+          // INSTRUMENTATION: Log WebSocket state when message arrives
+          const wsState = this.ws?.readyState ?? 'null';
+          const currentWsState = this.currentWs?.readyState ?? 'null';
+          const wsMatch = this.ws === this.currentWs;
+          
+          // INSTRUMENTATION: Log first 10 messages with full details
+          if (this.packetsRecvCount < 10) {
+            console.log(`[Voice Gateway] 📨 onmessage FIRED: packetsRecvCount=${this.packetsRecvCount}, ws.readyState=${wsState}, currentWs.readyState=${currentWsState}, wsMatch=${wsMatch}`);
+          }
+          
           // CRITICAL: Verify this is still the current WS (prevent stale handler)
-          if (this.ws !== this.currentWs) {
-            console.warn('[Voice Gateway] ⚠️ Received message on stale WebSocket, ignoring');
+          // BUT: Only block if ws is null and currentWs exists (definite stale handler)
+          if (!this.ws && this.currentWs) {
+            console.warn('[Voice Gateway] ⚠️ Received message on stale WebSocket (ws=null but currentWs exists), ignoring');
             return;
+          }
+          
+          // If ws exists but doesn't match currentWs, log but still process (might be race condition)
+          if (this.ws && this.currentWs && this.ws !== this.currentWs) {
+            console.warn(`[Voice Gateway] ⚠️ WebSocket mismatch detected: ws.readyState=${this.ws.readyState}, currentWs.readyState=${this.currentWs.readyState}`);
+            // Still process the message - don't block on mismatch
           }
           
           // INSTRUMENTATION: Log event.data constructor name
