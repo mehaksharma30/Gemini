@@ -181,28 +181,80 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       lastStatsLog: Date.now(),
     });
 
+    // CRITICAL FIX: Normalize callId to ensure consistency (remove whitespace, lowercase if needed)
+    const normalizedCallId = callId.trim();
+    
     // Join room
-    if (!rooms.has(callId)) {
-      rooms.set(callId, new Set());
+    if (!rooms.has(normalizedCallId)) {
+      rooms.set(normalizedCallId, new Set());
+      console.log(`[Voice Gateway] Created new room: callId=${normalizedCallId}`);
     }
-    rooms.get(callId)!.add(ws);
+    
+    // CRITICAL FIX: Check if this WebSocket is already in a room and remove it first
+    for (const [existingCallId, roomSet] of rooms.entries()) {
+      if (roomSet.has(ws)) {
+        roomSet.delete(ws);
+        console.log(`[Voice Gateway] Removed ${userId} from previous room ${existingCallId}`);
+        if (roomSet.size === 0) {
+          rooms.delete(existingCallId);
+        }
+        break;
+      }
+    }
+    
+    // CRITICAL FIX: Update connection metadata with normalized callId
+    const conn = connections.get(ws);
+    if (conn) {
+      conn.callId = normalizedCallId;
+    }
+    
+    rooms.get(normalizedCallId)!.add(ws);
 
-    const roomSize = rooms.get(callId)!.size;
-    console.log(`[Voice Gateway] User ${userId} joined call ${callId} (${roomSize} participant${roomSize !== 1 ? 's' : ''})`);
+    const roomSize = rooms.get(normalizedCallId)!.size;
+    console.log(`[Voice Gateway] User ${userId} joined call ${normalizedCallId} (${roomSize} participant${roomSize !== 1 ? 's' : ''})`);
     
     // INSTRUMENTATION: Log room participants to verify both users in same callId
-    const participants = Array.from(rooms.get(callId)!).map(ws => {
-      const c = connections.get(ws);
-      return c ? `${c.userId}(${c.callId})` : 'unknown';
+    const participants = Array.from(rooms.get(normalizedCallId)!).map(roomWs => {
+      const c = connections.get(roomWs);
+      return c ? `${c.userId}(callId=${c.callId}, readyState=${roomWs.readyState})` : 'unknown';
     }).filter(Boolean);
-    console.log(`[Voice Gateway] Room ${callId} participants: [${participants.join(', ')}]`);
+    console.log(`[Voice Gateway] Room ${normalizedCallId} participants: [${participants.join(', ')}]`);
     
-    // INSTRUMENTATION: Verify callId consistency - warn if participants have different callIds
-    const allCallIds = Array.from(rooms.get(callId)!).map(ws => connections.get(ws)?.callId).filter(Boolean);
+    // CRITICAL FIX: Verify callId consistency and fix mismatches
+    const allCallIds = Array.from(rooms.get(normalizedCallId)!).map(roomWs => connections.get(roomWs)?.callId).filter(Boolean);
     const uniqueCallIds = [...new Set(allCallIds)];
     if (uniqueCallIds.length > 1) {
-      console.error(`[Voice Gateway] ⚠️ WARNING: Room ${callId} has participants with different callIds: ${uniqueCallIds.join(', ')}`);
+      console.error(`[Voice Gateway] ⚠️ WARNING: Room ${normalizedCallId} has participants with different callIds: ${uniqueCallIds.join(', ')}`);
+      // CRITICAL FIX: Normalize all participants to use the same callId
+      rooms.get(normalizedCallId)!.forEach(roomWs => {
+        const c = connections.get(roomWs);
+        if (c && c.callId !== normalizedCallId) {
+          console.log(`[Voice Gateway] 🔧 Fixing callId mismatch: ${c.userId} callId changed from ${c.callId} to ${normalizedCallId}`);
+          c.callId = normalizedCallId;
+        }
+      });
     }
+    
+    // CRITICAL FIX: Send room status update to all participants
+    const roomStatusMessage = JSON.stringify({
+      type: 'room_status',
+      callId: normalizedCallId,
+      roomSize,
+      participants: participants.map(p => {
+        const match = p.match(/^([^(]+)/);
+        return match ? match[1] : p;
+      })
+    });
+    
+    rooms.get(normalizedCallId)!.forEach(roomWs => {
+      if (roomWs.readyState === WebSocket.OPEN) {
+        try {
+          roomWs.send(roomStatusMessage);
+        } catch (error: any) {
+          console.error(`[Voice Gateway] Error sending room status to participant:`, error.message);
+        }
+      }
+    });
 
     // Initialize isAlive flag
     (ws as any).isAlive = true;
@@ -295,29 +347,67 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
 
       const roomSize = room.size;
       
-      // INSTRUMENTATION: Log if room size < 2 (means no receiver)
+      // CRITICAL FIX: Handle room size < 2 - try to find receiver in other rooms with similar callId
       if (roomSize < 2) {
-        if (conn.packetsReceived % 50 === 0) {
-          console.warn(`[Voice Gateway] ⚠️ Room ${conn.callId} has only ${roomSize} participant(s) - no receiver! User ${conn.userId} is sending but no one to receive.`);
-          const participants = Array.from(room).map(ws => {
-            const c = connections.get(ws);
-            return c ? `${c.userId}(${c.callId})` : 'unknown';
-          }).filter(Boolean);
-          console.warn(`[Voice Gateway] ⚠️ Room ${conn.callId} participants: [${participants.join(', ')}]`);
+        console.warn(`[Voice Gateway] ⚠️ Room ${conn.callId} has only ${roomSize} participant(s) - no receiver! User ${conn.userId} is sending but no one to receive.`);
+        const participants = Array.from(room).map(ws => {
+          const c = connections.get(ws);
+          return c ? `${c.userId}(${c.callId}, readyState=${ws.readyState})` : 'unknown';
+        }).filter(Boolean);
+        console.warn(`[Voice Gateway] ⚠️ Room ${conn.callId} participants: [${participants.join(', ')}]`);
+        console.warn(`[Voice Gateway] ⚠️ ALL rooms in server:`, Array.from(rooms.entries()).map(([id, roomSet]) => 
+          `${id}(${roomSet.size} participants)`
+        ).join(', '));
+        
+        // CRITICAL FIX: Try to find receiver in other rooms (might be callId mismatch)
+        let foundReceiver = false;
+        for (const [otherCallId, otherRoom] of rooms.entries()) {
+          if (otherCallId !== conn.callId && otherRoom.size > 0) {
+            // Check if callIds are similar (might be same call with different format)
+            const callIdSimilar = otherCallId.includes(conn.callId) || conn.callId.includes(otherCallId);
+            if (callIdSimilar || otherRoom.size === 1) {
+              console.warn(`[Voice Gateway] 🔍 Found potential receiver room: ${otherCallId} with ${otherRoom.size} participant(s)`);
+              // Try to merge rooms or find the other participant
+              otherRoom.forEach(otherWs => {
+                const otherConn = connections.get(otherWs);
+                if (otherConn && otherConn.userId !== conn.userId && otherWs.readyState === WebSocket.OPEN) {
+                  console.warn(`[Voice Gateway] 🔧 Attempting to relay to ${otherConn.userId} in room ${otherCallId} (callId mismatch fix)`);
+                  try {
+                    otherWs.send(packetWithSender);
+                    foundReceiver = true;
+                    console.log(`[Voice Gateway] ✅ Successfully relayed to ${otherConn.userId} in different room (callId fix)`);
+                  } catch (error: any) {
+                    console.error(`[Voice Gateway] ❌ Failed to relay to ${otherConn.userId}:`, error.message);
+                  }
+                }
+              });
+            }
+          }
         }
-        return; // No one to relay to
+        
+        if (!foundReceiver) {
+          return; // No one to relay to
+        }
+        // If we found a receiver, continue to normal relay logic as well
       }
       
       let relayed = 0;
       const recipients: string[] = [];
       const skippedRecipients: string[] = [];
       
-      // INSTRUMENTATION: Log room details before relay (ALWAYS log first 20 packets to diagnose)
-      if (conn.packetsRelayed < 20) {
+      // INSTRUMENTATION: Log room details before relay (ALWAYS log first 50 packets to diagnose)
+      if (conn.packetsRelayed < 50) {
         const allParticipants = Array.from(room).map(roomWs => {
           const c = connections.get(roomWs);
           const isSender = roomWs === ws;
           return c ? `${c.userId}(readyState=${roomWs.readyState}, callId=${c.callId}${isSender ? ', SENDER' : ''})` : 'unknown';
+        }).filter(Boolean);
+        console.log(`[Voice Gateway] 🔄 Relay attempt #${conn.packetsRelayed + 1}: sender=${conn.userId}, roomSize=${roomSize}, participants: [${allParticipants.join(', ')}]`);
+      } else if (conn.packetsRelayed % 100 === 0) {
+        // Log every 100th packet after first 50
+        const allParticipants = Array.from(room).map(roomWs => {
+          const c = connections.get(roomWs);
+          return c ? `${c.userId}(readyState=${roomWs.readyState})` : 'unknown';
         }).filter(Boolean);
         console.log(`[Voice Gateway] 🔄 Relay attempt #${conn.packetsRelayed + 1}: sender=${conn.userId}, roomSize=${roomSize}, participants: [${allParticipants.join(', ')}]`);
       }
@@ -341,17 +431,69 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         
         // CRITICAL: Check WebSocket state - use numeric constant (1 = OPEN) for reliability
         const WS_OPEN = 1; // WebSocket.OPEN constant value
-        const wsReadyState = otherWs.readyState;
+        const WS_CONNECTING = 0;
+        const WS_CLOSING = 2;
+        const WS_CLOSED = 3;
+        let wsReadyState = otherWs.readyState;
         
-        // INSTRUMENTATION: Log WebSocket state before sending (always log first 10, then every 100)
-        if (conn.packetsRelayed < 10 || conn.packetsRelayed % 100 === 0) {
-          console.log(`[Voice Gateway] 🔍 Checking recipient ${otherConn.userId}: readyState=${wsReadyState} (OPEN=1, CONNECTING=0, CLOSING=2, CLOSED=3)`);
+        // CRITICAL FIX: Handle WebSocket state transitions
+        // If WebSocket is CONNECTING, wait a bit and check again (might be race condition)
+        if (wsReadyState === WS_CONNECTING) {
+          // Wait 100ms and check again (WebSocket might be opening)
+          setTimeout(() => {
+            const newState = otherWs.readyState;
+            if (newState === WS_OPEN) {
+              console.log(`[Voice Gateway] 🔧 WebSocket for ${otherConn.userId} transitioned to OPEN, retrying send`);
+              try {
+                otherWs.send(packetWithSender);
+                console.log(`[Voice Gateway] ✅ Successfully sent packet to ${otherConn.userId} after state transition`);
+              } catch (error: any) {
+                console.error(`[Voice Gateway] ❌ Error sending to ${otherConn.userId} after state transition:`, error.message);
+              }
+            }
+          }, 100);
+          skippedRecipients.push(`${otherConn.userId}(readyState=${wsReadyState}, retrying)`);
+          if (conn.packetsRelayed < 10) {
+            console.warn(`[Voice Gateway] ⚠️ WebSocket for ${otherConn.userId} is CONNECTING (readyState=0), will retry in 100ms`);
+          }
+          return; // Skip this attempt, but retry will happen
+        }
+        
+        // INSTRUMENTATION: Log WebSocket state before sending (ALWAYS log first 50, then every 100)
+        if (conn.packetsRelayed < 50 || conn.packetsRelayed % 100 === 0) {
+          console.log(`[Voice Gateway] 🔍 Checking recipient ${otherConn.userId}: readyState=${wsReadyState} (OPEN=1, CONNECTING=0, CLOSING=2, CLOSED=3), callId=${otherConn.callId}`);
         }
         
         if (wsReadyState !== WS_OPEN) {
           skippedRecipients.push(`${otherConn.userId}(readyState=${wsReadyState})`);
-          // CRITICAL: Always log skipped recipients (not just first 10) to diagnose
-          console.warn(`[Voice Gateway] ⚠️ Skipping relay to ${otherConn.userId}: WebSocket readyState=${wsReadyState} (not OPEN=1). CallId: ${otherConn.callId}`);
+          // CRITICAL: Always log skipped recipients to diagnose (not rate-limited for first 50)
+          if (conn.packetsRelayed < 50) {
+            console.warn(`[Voice Gateway] ⚠️ Skipping relay to ${otherConn.userId}: WebSocket readyState=${wsReadyState} (not OPEN=1). CallId: ${otherConn.callId}, Sender callId: ${conn.callId}`);
+            // CRITICAL FIX: If WebSocket is CLOSED or CLOSING, try to find if user reconnected
+            if (wsReadyState === WS_CLOSED || wsReadyState === WS_CLOSING) {
+              console.warn(`[Voice Gateway] 🔍 WebSocket for ${otherConn.userId} is ${wsReadyState === WS_CLOSED ? 'CLOSED' : 'CLOSING'}, checking for reconnection...`);
+              // Check if there's a newer connection for this userId
+              for (const [checkWs, checkConn] of connections.entries()) {
+                if (checkConn.userId === otherConn.userId && 
+                    checkConn.callId === conn.callId && 
+                    checkWs !== otherWs && 
+                    checkWs.readyState === WS_OPEN) {
+                  console.log(`[Voice Gateway] 🔧 Found reconnected WebSocket for ${otherConn.userId}, using new connection`);
+                  try {
+                    checkWs.send(packetWithSender);
+                    recipients.push(otherConn.userId);
+                    relayed++;
+                    console.log(`[Voice Gateway] ✅ Successfully relayed to reconnected ${otherConn.userId}`);
+                  } catch (error: any) {
+                    console.error(`[Voice Gateway] ❌ Error sending to reconnected ${otherConn.userId}:`, error.message);
+                  }
+                  return; // Skip the old connection
+                }
+              }
+            }
+          } else if (conn.packetsRelayed % 100 === 0) {
+            console.warn(`[Voice Gateway] ⚠️ Skipping relay to ${otherConn.userId}: WebSocket readyState=${wsReadyState} (not OPEN=1)`);
+          }
           return;
         }
         
