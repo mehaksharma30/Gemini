@@ -175,9 +175,25 @@ export class VoiceGatewayService {
       try {
         // Build WebSocket URL
         const baseUrl = GATEWAY_URL;
-        const url = `${baseUrl}/?callId=${encodeURIComponent(this.callId)}&userId=${encodeURIComponent(this.userId)}`;
+        // CRITICAL: Normalize callId (trim whitespace) to prevent mismatches
+        const normalizedCallId = this.callId.trim();
+        const normalizedUserId = this.userId.trim();
+        const url = `${baseUrl}/?callId=${encodeURIComponent(normalizedCallId)}&userId=${encodeURIComponent(normalizedUserId)}`;
         
         console.log(`[Voice Gateway] 🔌 Connecting to: ${url}`);
+        console.log(`[Voice Gateway] 📊 Connection params: callId="${normalizedCallId}" (length=${normalizedCallId.length}), userId="${normalizedUserId}" (length=${normalizedUserId.length})`);
+        
+        // CRITICAL: Verify callId and userId are not empty
+        if (!normalizedCallId || normalizedCallId.length === 0) {
+          console.error('[Voice Gateway] ❌ ERROR: callId is empty!');
+          reject(new Error('callId is empty'));
+          return;
+        }
+        if (!normalizedUserId || normalizedUserId.length === 0) {
+          console.error('[Voice Gateway] ❌ ERROR: userId is empty!');
+          reject(new Error('userId is empty'));
+          return;
+        }
         console.log(`[Voice Gateway] Attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts}`);
         
         // CRITICAL: Clear any existing WS and reset handler flag BEFORE creating new one
@@ -301,15 +317,33 @@ export class VoiceGatewayService {
           }
           
           if (typeof event.data === 'string') {
-            // Text message (connection confirmation) - log and ignore
+            // Text message (connection confirmation or room status) - log and handle
             console.log(`[Voice Gateway] RX: string message, constructor=${dataConstructor}, length=${event.data.length}`);
             try {
               const msg = JSON.parse(event.data);
               if (msg.type === 'connected') {
-                console.log(`[Voice Gateway] Connected to call: ${msg.callId} as ${msg.userId}`);
+                console.log(`[Voice Gateway] ✅ Connected to call: ${msg.callId} as ${msg.userId}`);
+                console.log(`[Voice Gateway] 📊 Connection verified: callId=${msg.callId}, userId=${msg.userId}, localCallId=${this.callId}, localUserId=${this.userId}`);
+                // CRITICAL: Verify callId matches
+                if (msg.callId !== this.callId) {
+                  console.error(`[Voice Gateway] ⚠️ WARNING: Server callId (${msg.callId}) doesn't match local callId (${this.callId})!`);
+                }
+                if (msg.userId !== this.userId) {
+                  console.error(`[Voice Gateway] ⚠️ WARNING: Server userId (${msg.userId}) doesn't match local userId (${this.userId})!`);
+                }
+              } else if (msg.type === 'room_status') {
+                console.log(`[Voice Gateway] 📊 Room status: callId=${msg.callId}, roomSize=${msg.roomSize}, participants: [${msg.participants?.join(', ') || 'none'}]`);
+                // CRITICAL: Verify we're in the right room
+                if (msg.roomSize < 2) {
+                  console.warn(`[Voice Gateway] ⚠️ WARNING: Room has only ${msg.roomSize} participant(s) - no other user in call!`);
+                } else {
+                  console.log(`[Voice Gateway] ✅ Room has ${msg.roomSize} participants - ready for audio relay`);
+                }
+              } else {
+                console.log('[Voice Gateway] Received text message:', msg);
               }
             } catch (e) {
-              console.log('[Voice Gateway] Received text message:', event.data);
+              console.log('[Voice Gateway] Received text message (not JSON):', event.data);
             }
             return;
           }
