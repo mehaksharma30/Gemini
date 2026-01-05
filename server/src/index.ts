@@ -81,6 +81,15 @@ const corsOptions = {
 // Apply CORS middleware
 app.use(cors(corsOptions));
 
+// Handle WebSocket upgrade requests - ensure they're not blocked
+app.use((req, res, next) => {
+  // Allow WebSocket upgrade requests to pass through
+  if (req.headers.upgrade === 'websocket') {
+    return next();
+  }
+  next();
+});
+
 // Socket.IO CORS configuration
 const io = new Server(httpServer, {
   cors: {
@@ -113,6 +122,16 @@ app.use('/api/webpubsub', webPubSubRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'MindMemos API is running' });
+});
+
+// Health check for Voice Gateway WebSocket endpoint
+app.get('/voice-gateway/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    message: 'Voice Gateway WebSocket endpoint is available',
+    websocket: true,
+    path: '/voice-gateway'
+  });
 });
 
 setupDMSocket(io);

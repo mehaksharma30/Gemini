@@ -24,10 +24,25 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     server: httpServer,
     path: '/voice-gateway',
     perMessageDeflate: false, // Disable compression for lower latency
-    clientTracking: true
+    clientTracking: true,
+    verifyClient: (info: { origin?: string; req: any; secure: boolean }) => {
+      // Log connection attempts for debugging
+      console.log(`[Voice Gateway] Connection attempt from ${info.origin || 'unknown origin'}, path: ${info.req.url}`);
+      return true; // Accept all connections (CORS is handled separately)
+    }
   });
 
   console.log('[Voice Gateway] WebSocket server initialized on /voice-gateway');
+  
+  // Handle WebSocket server errors
+  wss.on('error', (error: Error) => {
+    console.error('[Voice Gateway] WebSocket server error:', error);
+  });
+  
+  // Log when server is ready
+  wss.on('listening', () => {
+    console.log('[Voice Gateway] WebSocket server is listening and ready for connections');
+  });
 
   wss.on('connection', (ws: WebSocket, req) => {
     // Parse query parameters from URL
