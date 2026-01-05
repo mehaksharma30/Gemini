@@ -41,5 +41,4 @@ jobs:
           app-name: 'mindmemos-api-2026'
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: './server'
-          startup-command: 'npm start'
 
