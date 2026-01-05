@@ -268,13 +268,7 @@ export class VoiceGatewayService {
         console.log(`[Voice Gateway] 📨 Attaching onmessage handler to WebSocket (readyState=${this.ws.readyState})`);
         this.onmessageHandlerAttached = true;
         
-        // CRITICAL: Verify handler is attached
-        if (!this.ws.onmessage) {
-          console.error('[Voice Gateway] ❌ ERROR: onmessage handler is null after assignment!');
-        } else {
-          console.log('[Voice Gateway] ✅ onmessage handler successfully attached');
-        }
-        
+        // CRITICAL: Attach handler first, then verify
         this.ws.onmessage = async (event) => {
           // CRITICAL: Log EVERY message received to diagnose why recv/sec=0
           // INSTRUMENTATION: Log WebSocket state when message arrives
@@ -421,6 +415,15 @@ export class VoiceGatewayService {
             console.error('[Voice Gateway] Error handling binary message:', error, 'data type:', event.data?.constructor?.name);
           }
         };
+        
+        // CRITICAL: Verify handler is attached AFTER assignment (use setTimeout to check after assignment completes)
+        setTimeout(() => {
+          if (!this.ws || !this.ws.onmessage) {
+            console.error('[Voice Gateway] ❌ ERROR: onmessage handler is null after assignment! WebSocket readyState:', this.ws?.readyState);
+          } else {
+            console.log('[Voice Gateway] ✅ onmessage handler successfully attached and verified (readyState:', this.ws.readyState, ')');
+          }
+        }, 0);
 
         this.ws.onerror = (error: Event) => {
           console.error(`[Voice Gateway] ❌ WebSocket error:`, error);
