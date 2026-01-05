@@ -462,13 +462,19 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       const skippedRecipients: string[] = [];
       
       // CRITICAL: ALWAYS log first 100 relay attempts to diagnose why packets aren't being relayed
+      // CRITICAL: Verify packet is a Buffer before sending
+      if (!Buffer.isBuffer(packetWithSender)) {
+        console.error(`[Voice Gateway] ❌ CRITICAL: packetWithSender is not a Buffer! Type: ${typeof packetWithSender}, constructor: ${packetWithSender?.constructor?.name}`);
+        return;
+      }
+      
       if (conn.packetsRelayed < 100) {
         const allParticipants = Array.from(room).map(roomWs => {
           const c = connections.get(roomWs);
           const isSender = roomWs === ws;
           return c ? `${c.userId}(readyState=${roomWs.readyState}, callId=${c.callId}${isSender ? ', SENDER' : ''})` : 'unknown';
         }).filter(Boolean);
-        console.log(`[Voice Gateway] 🔄 Relay attempt #${conn.packetsRelayed + 1}: sender=${conn.userId}, roomSize=${roomSize}, participants: [${allParticipants.join(', ')}]`);
+        console.log(`[Voice Gateway] 🔄 Relay attempt #${conn.packetsRelayed + 1}: sender=${conn.userId}, roomSize=${roomSize}, packetSize=${packetWithSender.length}, participants: [${allParticipants.join(', ')}]`);
       } else if (conn.packetsRelayed % 100 === 0) {
         // Log every 100th packet after first 100
         const allParticipants = Array.from(room).map(roomWs => {
@@ -567,9 +573,13 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
           // CRITICAL: Send packet - this is where the actual relay happens
           // CRITICAL: Log EVERY send attempt for first 100 packets
           if (conn.packetsRelayed < 100) {
-            console.log(`[Voice Gateway] 📤 Sending packet to ${otherConn.userId}: readyState=${wsReadyState}, packetSize=${packetWithSender.length} bytes`);
+            console.log(`[Voice Gateway] 📤 Sending packet to ${otherConn.userId}: readyState=${wsReadyState}, packetSize=${packetWithSender.length} bytes, callId=${otherConn.callId}`);
           }
+          
+          // CRITICAL: Send as binary (Buffer is automatically sent as binary, but be explicit)
+          // The ws library automatically detects Buffer and sends as binary
           otherWs.send(packetWithSender);
+          
           recipients.push(otherConn.userId);
           relayed++;
           
@@ -580,11 +590,11 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
             console.log(`[Voice Gateway] ✅ Relayed ${conn.packetsRelayed + relayed} packets: ${conn.userId} -> ${otherConn.userId}`);
           } else if (conn.packetsRelayed < 10) {
             // Log first 10 successful sends
-            console.log(`[Voice Gateway] ✅ Sent packet #${conn.packetsRelayed + relayed} to ${otherConn.userId}`);
+            console.log(`[Voice Gateway] ✅ Sent packet #${conn.packetsRelayed + relayed} to ${otherConn.userId} (readyState=${wsReadyState}, binary=true)`);
           }
         } catch (error: any) {
           // CRITICAL: Always log send errors (not rate-limited)
-          console.error(`[Voice Gateway] ❌ Error sending packet to ${otherConn.userId}:`, error.message, `CallId: ${otherConn.callId}, readyState: ${wsReadyState}`);
+          console.error(`[Voice Gateway] ❌ Error sending packet to ${otherConn.userId}:`, error.message, `CallId: ${otherConn.callId}, readyState: ${wsReadyState}, error type: ${error.constructor?.name}`);
           skippedRecipients.push(`${otherConn.userId}(error: ${error.message})`);
         }
       });

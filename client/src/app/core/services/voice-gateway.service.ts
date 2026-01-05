@@ -301,7 +301,15 @@ export class VoiceGatewayService {
           
           // CRITICAL: Log EVERY message (not just first 10) to diagnose why recv/sec=0
           // If we see this log, messages ARE arriving at client
-          console.log(`[Voice Gateway] 📨 onmessage FIRED: packetsRecvCount=${this.packetsRecvCount}, ws.readyState=${wsState}, currentWs.readyState=${currentWsState}, wsMatch=${wsMatch}, event.data type=${dataType}`);
+          // CRITICAL: Log binary messages with more detail
+          if (dataType === 'Blob' || dataType === 'ArrayBuffer' || (event.data && typeof event.data !== 'string')) {
+            const size = event.data instanceof Blob ? event.data.size : 
+                        event.data instanceof ArrayBuffer ? event.data.byteLength :
+                        (event.data as any)?.byteLength || (event.data as any)?.length || 'unknown';
+            console.log(`[Voice Gateway] 📨 onmessage FIRED: BINARY DATA! packetsRecvCount=${this.packetsRecvCount}, size=${size}, type=${dataType}, constructor=${dataConstructor}`);
+          } else {
+            console.log(`[Voice Gateway] 📨 onmessage FIRED: packetsRecvCount=${this.packetsRecvCount}, ws.readyState=${wsState}, currentWs.readyState=${currentWsState}, wsMatch=${wsMatch}, event.data type=${dataType}`);
+          }
           
           // CRITICAL: Verify this is still the current WS (prevent stale handler)
           // BUT: Only block if ws is null and currentWs exists (definite stale handler)
