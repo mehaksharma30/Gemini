@@ -20,7 +20,10 @@ const PAYLOAD_SIZE = 640; // SAMPLES_PER_FRAME * 2 (Int16 = 2 bytes)
 function downsampleTo16k(inputFloat32: Float32Array, inputRate: number): Float32Array {
   if (inputRate === SAMPLE_RATE) {
     // Create a new Float32Array to ensure it's backed by ArrayBuffer (not SharedArrayBuffer)
-    return new Float32Array(inputFloat32);
+    // Copy the data to a new ArrayBuffer-backed Float32Array
+    const result = new Float32Array(inputFloat32.length);
+    result.set(inputFloat32);
+    return result;
   }
 
   const ratio = inputRate / SAMPLE_RATE;
@@ -51,6 +54,7 @@ export class AudioCommunicationService {
   private audioContext: AudioContext | null = null;
   private audioProcessor: ScriptProcessorNode | null = null;
   private audioSource: MediaStreamAudioSourceNode | null = null;
+  private micTrack: MediaStreamTrack | null = null; // Store mic track for soft mute
   
   private stateSubject = new Subject<AudioStreamState>();
   private errorSubject = new Subject<string>();
@@ -78,7 +82,8 @@ export class AudioCommunicationService {
       this.currentState.isConnected = connected;
       this.stateSubject.next({ ...this.currentState });
       if (!connected) {
-        // Stop recording if disconnected
+        // Stop recording if disconnected, but do NOT close audio context
+        // When using Voice Gateway, the gateway's audio context should remain open
         this.stopRecording().catch(console.error);
       }
     });
@@ -188,24 +193,48 @@ export class AudioCommunicationService {
       
       console.log('[Audio Communication] Microphone access granted');
 
+      // Store mic track for soft mute (enable/disable, never stop)
+      this.micTrack = this.mediaStream.getAudioTracks()[0] || null;
+      if (!this.micTrack) {
+        throw new Error('No audio track found in media stream');
+      }
+      
       // Use Web Audio API to capture PCM audio for real-time streaming
       this.audioSource = this.audioContext!.createMediaStreamSource(this.mediaStream);
       this.audioProcessor = this.audioContext!.createScriptProcessor(4096, 1, 1);
       
       const inputSampleRate = this.audioContext!.sampleRate;
       
+      // Create monitorGain for mic monitoring (fixed at 0, never reused for playback)
+      const monitorGain = this.audioContext!.createGain();
+      monitorGain.gain.value = 0; // Always silent for monitoring
+      
       this.audioProcessor.onaudioprocess = (e) => {
-        // Only block if mic is muted or WebSocket is not open
-        if (this.currentState.isMuted || !this.voiceGatewayService.isConnected()) {
-          return;
+        // SOFT MUTE: Keep onaudioprocess running, but gate sending via boolean check
+        // Do NOT return early - keep processing pipeline active
+        if (!this.voiceGatewayService.isConnected()) {
+          return; // Only skip if not connected
+        }
+        
+        // If muted, still process but don't send (soft gate)
+        if (this.currentState.isMuted) {
+          return; // Soft gate: process continues but no sending
         }
 
         const inputData = e.inputBuffer.getChannelData(0);
         
         // Downsample if needed
-        let processedData = inputData;
+        // Copy to new Float32Array to ensure ArrayBuffer backing (not SharedArrayBuffer)
+        let processedData: Float32Array;
         if (inputSampleRate !== SAMPLE_RATE) {
-          processedData = downsampleTo16k(inputData, inputSampleRate);
+          // Create a copy first to ensure ArrayBuffer backing
+          const inputCopy = new Float32Array(inputData.length);
+          inputCopy.set(inputData);
+          processedData = downsampleTo16k(inputCopy, inputSampleRate);
+        } else {
+          // Create a copy to ensure ArrayBuffer backing
+          processedData = new Float32Array(inputData.length);
+          processedData.set(inputData);
         }
         
         // Append to accumulator
@@ -241,13 +270,11 @@ export class AudioCommunicationService {
         }
       };
 
-      // Connect processor to zero-gain node to prevent feedback/echo
+      // Connect processor to monitorGain (fixed at 0, never reused for playback)
       // DO NOT connect to audioContext.destination (causes echo)
-      const zeroGain = this.audioContext!.createGain();
-      zeroGain.gain.value = 0; // Silent output
       this.audioSource.connect(this.audioProcessor);
-      this.audioProcessor.connect(zeroGain);
-      zeroGain.connect(this.audioContext!.destination);
+      this.audioProcessor.connect(monitorGain);
+      monitorGain.connect(this.audioContext!.destination);
 
       this.currentState.isRecording = true;
       this.stateSubject.next({ ...this.currentState });
@@ -279,10 +306,13 @@ export class AudioCommunicationService {
         this.audioSource = null;
       }
 
+      // SOFT CLEANUP: Only stop tracks on explicit stopRecording (not on mute)
+      // For mute, we use track.enabled = false instead
       if (this.mediaStream) {
         this.mediaStream.getTracks().forEach(track => track.stop());
         this.mediaStream = null;
       }
+      this.micTrack = null;
 
       // Clear accumulator
       this.txAcc = new Float32Array(0);
@@ -300,13 +330,38 @@ export class AudioCommunicationService {
   // Note: Remote audio playback is handled by VoiceGatewayService (jitter buffer)
 
   /**
-   * Mute/unmute microphone
+   * Mute/unmute microphone (SOFT MUTE - never detaches audio pipeline)
+   * IMPORTANT: 
+   * - Do NOT call track.stop(), stream.getTracks().stop(), processor.disconnect(), ws.close(), cleanup()
+   * - Use micTrack.enabled = !micMuted for soft mute
+   * - Keep onaudioprocess running (boolean gate prevents ws.send only)
    */
   async toggleMute(): Promise<void> {
     try {
       this.currentState.isMuted = !this.currentState.isMuted;
       this.stateSubject.next({ ...this.currentState });
+      
+      // SOFT MUTE: Use track.enabled (never stop track)
+      if (this.micTrack) {
+        this.micTrack.enabled = !this.currentState.isMuted;
+      }
+      
+      // Log mute state
       console.log(`[Audio Communication] Microphone ${this.currentState.isMuted ? 'muted' : 'unmuted'}`);
+      console.log(`[Audio Communication] micMuted=${this.currentState.isMuted}, audioCtx.state=${this.audioContext?.state || 'null'}, micTrack.enabled=${this.micTrack?.enabled ?? 'null'}`);
+      
+      // On unmute, ALWAYS ensure audio context is running
+      if (!this.currentState.isMuted && this.audioContext) {
+        if (this.audioContext.state === 'suspended') {
+          await this.audioContext.resume();
+          console.log('[Audio Communication] audioCtx.state=', this.audioContext.state);
+        } else if (this.audioContext.state === 'closed') {
+          console.warn('[Audio Communication] Audio context was closed, cannot resume. This should not happen.');
+        }
+      }
+      
+      // Also update Voice Gateway mic mute state (for boolean gate in sendAudioPacket)
+      await this.voiceGatewayService.toggleMicMute();
     } catch (error: any) {
       console.error('[Audio Communication] Toggle mute error:', error);
       this.errorSubject.next(error.message || 'Failed to toggle mute');
@@ -323,8 +378,11 @@ export class AudioCommunicationService {
 
   /**
    * Cleanup and disconnect
+   * IMPORTANT: When using Voice Gateway, do NOT close/suspend the gateway's audio context.
+   * Only suspend our own recording audio context for non-terminal actions.
+   * AudioContext should only be closed on explicit END CALL or page unload.
    */
-  async cleanup(): Promise<void> {
+  async cleanup(endCall: boolean = false): Promise<void> {
     try {
       await this.stopRecording();
       
@@ -332,7 +390,18 @@ export class AudioCommunicationService {
       await this.voiceGatewayService.disconnect();
       
       if (this.audioContext) {
-        await this.audioContext.close();
+        // Only close audio context on explicit END CALL
+        // For mute/unmute or temporary cleanup, use suspend() instead
+        if (endCall) {
+          await this.audioContext.close();
+          console.log('[Audio Communication] Audio context closed (end call)');
+        } else {
+          // Suspend instead of close for non-terminal actions
+          if (this.audioContext.state !== 'closed') {
+            await this.audioContext.suspend();
+            console.log('[Audio Communication] Audio context suspended (not end call)');
+          }
+        }
         this.audioContext = null;
       }
       

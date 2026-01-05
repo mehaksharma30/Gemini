@@ -9,9 +9,9 @@ const PAYLOAD_SIZE = 640; // SAMPLES_PER_FRAME * 2 (Int16 = 2 bytes)
 const PACKET_SIZE = 12 + PAYLOAD_SIZE; // header (12) + payload (640)
 
 // Jitter buffer settings
-const MIN_BUFFER_PACKETS = 10; // ~200ms buffer before starting playback
-const MAX_BUFFER_PACKETS = 30; // ~600ms max buffer
-const LOW_BUFFER_THRESHOLD = 6; // Pause if buffer drops below this
+const MIN_BUFFER_PACKETS = 25; // ~500ms buffer before starting playback
+const MAX_BUFFER_PACKETS = 50; // ~1000ms max buffer
+const LOW_BUFFER_THRESHOLD = 12; // Pause scheduling if buffer drops below this (but don't reset state)
 
 // Voice Gateway WebSocket URL (local development)
 const GATEWAY_URL = 'ws://localhost:8080';
@@ -49,15 +49,25 @@ export class VoiceGatewayService {
   
   // Audio context for playback
   private audioContext: AudioContext | null = null;
-  private playbackGainNode: GainNode | null = null;
+  private playbackGain: GainNode | null = null; // Dedicated gain node for remote audio playback (speaker mute/unmute)
+  
+  // Mute states
+  private isMicMuted: boolean = false;
+  private isSpeakerMuted: boolean = false;
   
   // Jitter buffer for playback
   private jitterBuffer: Map<number, { timestamp: number; payload: ArrayBuffer }> = new Map();
   private nextPlaybackSeq: number | null = null;
-  private isPlaying: boolean = false;
+  private isPlaying: boolean = false; // True when playback has started
+  private isSchedulingPaused: boolean = false; // True when scheduling is paused due to low buffer (but playback state intact)
   private nextPlayTime: number | null = null;
   private scheduledSources: Set<AudioBufferSourceNode> = new Set();
   private playbackSchedulerInterval: any = null;
+  
+  // Stats for logging (once per second)
+  private packetsRecvCount: number = 0;
+  private lastLogTime: number = 0;
+  private statsLogInterval: any = null;
 
   // Connection state
   private connectedSubject = new BehaviorSubject<boolean>(false);
@@ -96,15 +106,44 @@ export class VoiceGatewayService {
           console.log('[Voice Gateway] Connected');
           this.connectedSubject.next(true);
           
-          // Initialize audio context for playback
-          if (!this.audioContext) {
-            this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-            if (this.audioContext.state === 'suspended') {
-              this.audioContext.resume();
+          // Initialize audio context for playback (separate from audio-communication service)
+          if (!this.audioContext || this.audioContext.state === 'closed') {
+            // If context was closed, create a new one
+            if (this.audioContext && this.audioContext.state === 'closed') {
+              console.warn('[Voice Gateway] Audio context was closed, creating new one');
             }
-            this.playbackGainNode = this.audioContext.createGain();
-            this.playbackGainNode.connect(this.audioContext.destination);
-            console.log('[Voice Gateway] Audio context initialized:', this.audioContext.sampleRate, 'Hz');
+            this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+            
+            // Ensure context is running
+            if (this.audioContext.state === 'suspended') {
+              this.audioContext.resume().then(() => {
+                console.log('[Voice Gateway] Audio context resumed, state:', this.audioContext!.state);
+              }).catch(err => {
+                console.error('[Voice Gateway] Failed to resume audio context:', err);
+              });
+            }
+            
+            // Create dedicated playbackGain node for remote audio playback (speaker mute/unmute)
+            this.playbackGain = this.audioContext.createGain();
+            this.playbackGain.gain.value = 1.0; // Start unmuted
+            this.playbackGain.connect(this.audioContext.destination);
+            console.log('[Voice Gateway] Audio context initialized:', this.audioContext.sampleRate, 'Hz, state:', this.audioContext.state);
+            
+            // Monitor audio context state changes
+            this.audioContext.addEventListener('statechange', () => {
+              console.log('[Voice Gateway] Audio context state changed to:', this.audioContext!.state);
+              if (this.audioContext!.state === 'closed') {
+                console.error('[Voice Gateway] WARNING: Audio context was closed! This should not happen.');
+              }
+            });
+          }
+          
+          // Start stats logging interval (once per second)
+          if (!this.statsLogInterval) {
+            this.lastLogTime = Date.now();
+            this.statsLogInterval = setInterval(() => {
+              this.logStats();
+            }, 1000);
           }
           
           resolve();
@@ -121,18 +160,71 @@ export class VoiceGatewayService {
             } catch (e) {
               console.log('[Voice Gateway] Received text message:', event.data);
             }
-          } else if (event.data instanceof Blob) {
-            // Binary message (audio packet) - convert Blob to ArrayBuffer
-            try {
-              const arrayBuffer = await event.data.arrayBuffer();
-              this.handleAudioPacket(arrayBuffer);
-            } catch (error: any) {
-              console.error('[Voice Gateway] Error converting Blob to ArrayBuffer:', error);
+            return;
+          }
+          
+          // Handle binary data (audio packets)
+          let arrayBuffer: ArrayBuffer | null = null;
+          
+          try {
+            if (event.data instanceof ArrayBuffer) {
+              arrayBuffer = event.data;
+            } else if (event.data instanceof Blob) {
+              arrayBuffer = await event.data.arrayBuffer();
+            } else if (event.data && typeof event.data === 'object') {
+              // Node.js ws library sends Buffer or Uint8Array
+              const data = event.data as any;
+              
+              // Helper function to convert SharedArrayBuffer to ArrayBuffer
+              const toArrayBuffer = (buf: ArrayBuffer | SharedArrayBuffer): ArrayBuffer => {
+                if (buf instanceof SharedArrayBuffer) {
+                  // Copy SharedArrayBuffer to ArrayBuffer
+                  const uint8 = new Uint8Array(buf);
+                  const newBuf = new ArrayBuffer(uint8.length);
+                  new Uint8Array(newBuf).set(uint8);
+                  return newBuf;
+                }
+                return buf;
+              };
+              
+              // Check if it has a buffer property (Uint8Array, Buffer, etc.)
+              if (data.buffer && (data.buffer instanceof ArrayBuffer || data.buffer instanceof SharedArrayBuffer)) {
+                // Use the underlying ArrayBuffer (convert SharedArrayBuffer if needed)
+                const byteOffset = data.byteOffset || 0;
+                const byteLength = data.byteLength || data.length;
+                const underlyingBuffer = toArrayBuffer(data.buffer);
+                arrayBuffer = underlyingBuffer.slice(byteOffset, byteOffset + byteLength);
+              } else if (data instanceof Uint8Array) {
+                // Create new ArrayBuffer from Uint8Array (handle SharedArrayBuffer)
+                const underlyingBuffer = toArrayBuffer(data.buffer);
+                arrayBuffer = underlyingBuffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+              } else if (typeof data.length === 'number') {
+                // Try to convert Buffer-like object
+                const uint8 = new Uint8Array(data.length);
+                for (let i = 0; i < data.length; i++) {
+                  uint8[i] = data[i];
+                }
+                arrayBuffer = uint8.buffer;
+              } else {
+                console.warn('[Voice Gateway] Unknown binary data type:', data?.constructor?.name, 'keys:', Object.keys(data || {}));
+                return;
+              }
+            } else {
+              console.warn('[Voice Gateway] Received non-binary, non-string data:', typeof event.data, event.data?.constructor?.name);
+              return;
             }
-          } else if (event.data instanceof ArrayBuffer) {
-            this.handleAudioPacket(event.data);
-          } else {
-            console.warn('[Voice Gateway] Received unknown binary data type:', event.data.constructor.name);
+            
+            if (arrayBuffer) {
+              // Log first few packets for debugging
+              if (this.packetsRecvCount < 3) {
+                console.log(`[Voice Gateway] Received binary message, size: ${arrayBuffer.byteLength} bytes, type: ${event.data?.constructor?.name}`);
+              }
+              this.handleAudioPacket(arrayBuffer);
+            } else {
+              console.warn('[Voice Gateway] Failed to convert message to ArrayBuffer');
+            }
+          } catch (error: any) {
+            console.error('[Voice Gateway] Error handling binary message:', error, 'data type:', event.data?.constructor?.name);
           }
         };
 
@@ -165,11 +257,8 @@ export class VoiceGatewayService {
       this.ws = null;
     }
     
-    if (this.audioContext) {
-      await this.audioContext.close();
-      this.audioContext = null;
-      this.playbackGainNode = null;
-    }
+    // Note: We don't close audioContext on disconnect to allow reconnection
+    // Only cleanup playback state, not the audio context itself
     
     this.connectedSubject.next(false);
     console.log('[Voice Gateway] Disconnected');
@@ -182,6 +271,11 @@ export class VoiceGatewayService {
    * @param pcm16Data - Int16Array of 320 samples (640 bytes)
    */
   sendAudioPacket(pcm16Data: Int16Array): void {
+    // Mic mute: do not send packets if muted (but don't stop tracks/engine)
+    if (this.isMicMuted) {
+      return;
+    }
+    
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return;
     }
@@ -211,13 +305,134 @@ export class VoiceGatewayService {
       console.error('[Voice Gateway] Error sending audio packet:', error);
     }
   }
+  
+  /**
+   * Toggle microphone mute (SOFT MUTE - boolean gate only)
+   * IMPORTANT: Only toggles boolean to stop sending packets. Does NOT stop tracks or touch audioCtx lifecycle.
+   */
+  async toggleMicMute(): Promise<void> {
+    this.isMicMuted = !this.isMicMuted;
+    
+    // Log mute state
+    console.log(`[Voice Gateway] MicMuted=${this.isMicMuted}`);
+    console.log(`[Voice Gateway] audioCtx.state=${this.audioContext?.state || 'null'}, micMuted=${this.isMicMuted}`);
+    
+    // On unmute, ALWAYS ensure audio context is running
+    if (!this.isMicMuted && this.audioContext) {
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+        console.log('[Voice Gateway] audioCtx.state=', this.audioContext.state);
+      } else if (this.audioContext.state === 'closed') {
+        console.error('[Voice Gateway] WARNING: Audio context is closed on unmute! This should not happen.');
+      }
+    }
+  }
+  
+  /**
+   * Toggle speaker mute (SOFT MUTE - never detaches audio pipeline)
+   * IMPORTANT: 
+   * - Only sets playbackGain.gain.value to 0/1
+   * - Does NOT touch WebSocket, audioCtx lifecycle, or rxQueue
+   * - Playback scheduler continues even when muted
+   */
+  async toggleSpeakerMute(): Promise<void> {
+    this.isSpeakerMuted = !this.isSpeakerMuted;
+    
+    // SOFT MUTE: Only adjust gain - do NOT touch WebSocket or audioCtx lifecycle
+    if (this.playbackGain) {
+      this.playbackGain.gain.value = this.isSpeakerMuted ? 0 : 1;
+    }
+    
+    // Log mute state with stats
+    const stats = this.getCurrentStats();
+    console.log(`[Voice Gateway] SpeakerMuted=${this.isSpeakerMuted}`);
+    console.log(`[Voice Gateway] audioCtx.state=${this.audioContext?.state || 'null'}, speakerMuted=${this.isSpeakerMuted}, playbackGain.gain.value=${this.playbackGain?.gain.value ?? 'null'}`);
+    console.log(`[Voice Gateway] packetsRecv/sec=${stats.packetsRecvPerSec}, bufferDepth=${stats.bufferDepth}`);
+    
+    // On unmute, ALWAYS ensure audio context is running
+    if (!this.isSpeakerMuted && this.audioContext) {
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+        console.log('[Voice Gateway] audioCtx.state=', this.audioContext.state);
+      } else if (this.audioContext.state === 'closed') {
+        console.error('[Voice Gateway] WARNING: Audio context is closed on unmute! This should not happen.');
+      }
+      // Ensure playback continues if buffer is healthy (do not clear rxQueue)
+      this.ensurePlaybackLoop();
+    }
+  }
+  
+  /**
+   * Get current stats for logging
+   */
+  private getCurrentStats(): { packetsRecvPerSec: number; bufferDepth: number } {
+    return {
+      packetsRecvPerSec: this.packetsRecvCount,
+      bufferDepth: this.jitterBuffer.size
+    };
+  }
+  
+  /**
+   * Ensure playback loop continues (called after unmute)
+   * IMPORTANT: 
+   * - Do NOT clear rxQueue on mute - keep buffer intact
+   * - Do NOT reset nextPlayTime on mute/unmute
+   * - Only resume scheduling if it was paused
+   */
+  private ensurePlaybackLoop(): void {
+    if (!this.audioContext || !this.playbackGain) {
+      return;
+    }
+    
+    // If we have packets and playback hasn't started, initialize it
+    if (!this.isPlaying && this.jitterBuffer.size >= MIN_BUFFER_PACKETS) {
+      const seqs = Array.from(this.jitterBuffer.keys()).sort((a, b) => a - b);
+      if (this.nextPlaybackSeq === null) {
+        this.nextPlaybackSeq = seqs[0];
+        this.nextPlayTime = this.audioContext.currentTime + 0.30;
+      }
+      this.isPlaying = true;
+      this.isSchedulingPaused = false;
+      console.log(`[Voice Gateway] Starting playback after unmute from seq ${this.nextPlaybackSeq} (buffer: ${this.jitterBuffer.size} packets)`);
+      
+      // Start scheduler if not running
+      if (!this.playbackSchedulerInterval) {
+        this.playbackSchedulerInterval = setInterval(() => {
+          this.scheduleNextPacket();
+        }, FRAME_DURATION_MS);
+      }
+    } else if (this.isPlaying && this.isSchedulingPaused && this.jitterBuffer.size >= LOW_BUFFER_THRESHOLD) {
+      // Resume scheduling if it was paused (but don't reset state)
+      this.isSchedulingPaused = false;
+      console.log(`[Voice Gateway] Resuming scheduling after unmute (buffer: ${this.jitterBuffer.size} packets)`);
+    }
+  }
+  
+  /**
+   * Check if mic is muted
+   */
+  isMicMutedState(): boolean {
+    return this.isMicMuted;
+  }
+  
+  /**
+   * Check if speaker is muted
+   */
+  isSpeakerMutedState(): boolean {
+    return this.isSpeakerMuted;
+  }
 
   /**
    * Handle incoming audio packet
    */
   private handleAudioPacket(data: ArrayBuffer): void {
-    if (!data || data.byteLength !== PACKET_SIZE) {
-      console.warn(`[Voice Gateway] Invalid packet size: ${data?.byteLength || 'undefined'} (expected ${PACKET_SIZE})`);
+    if (!data) {
+      console.warn('[Voice Gateway] Received null/undefined packet');
+      return;
+    }
+    
+    if (data.byteLength !== PACKET_SIZE) {
+      console.warn(`[Voice Gateway] Invalid packet size: ${data.byteLength} (expected ${PACKET_SIZE})`);
       return;
     }
 
@@ -229,6 +444,12 @@ export class VoiceGatewayService {
 
       // Add to jitter buffer
       this.jitterBuffer.set(seq, { timestamp: timestampMs, payload });
+      this.packetsRecvCount++;
+
+      // Log first few packets for debugging
+      if (this.packetsRecvCount <= 5) {
+        console.log(`[Voice Gateway] Received packet #${this.packetsRecvCount}, seq=${seq}, bufferDepth=${this.jitterBuffer.size}`);
+      }
 
       // Process jitter buffer
       this.processJitterBuffer();
@@ -239,21 +460,27 @@ export class VoiceGatewayService {
 
   /**
    * Process jitter buffer and play audio
+   * IMPORTANT: 
+   * - NEVER hard-stop/restart playback on low buffer
+   * - On low buffer, just pause scheduling but keep nextPlayTime and playback state intact
+   * - Playback continues even when speaker is muted (playbackGain.gain.value=0 makes it silent)
    */
   private processJitterBuffer(): void {
     if (!this.audioContext) return;
 
-    // Check if we should start playback
+    // Check if we should start playback (first time only)
     if (!this.isPlaying) {
       if (this.jitterBuffer.size >= MIN_BUFFER_PACKETS) {
         // Initialize playback
         const seqs = Array.from(this.jitterBuffer.keys()).sort((a, b) => a - b);
         this.nextPlaybackSeq = seqs[0];
-        this.nextPlayTime = this.audioContext.currentTime + 0.20; // 200ms initial delay
+        this.nextPlayTime = this.audioContext.currentTime + 0.30; // 300ms initial delay
         this.isPlaying = true;
-        console.log(`[Voice Gateway] Starting playback from seq ${this.nextPlaybackSeq} (buffer: ${this.jitterBuffer.size} packets)`);
+        this.isSchedulingPaused = false;
+        console.log(`[Voice Gateway] Starting playback from seq ${this.nextPlaybackSeq} (buffer: ${this.jitterBuffer.size} packets, speakerMuted=${this.isSpeakerMuted})`);
         
         // Start periodic scheduler (every 20ms)
+        // IMPORTANT: Scheduler continues even when muted - playbackGain controls silence
         if (!this.playbackSchedulerInterval) {
           this.playbackSchedulerInterval = setInterval(() => {
             this.scheduleNextPacket();
@@ -264,11 +491,35 @@ export class VoiceGatewayService {
       }
     }
 
-    // Check if we should pause playback
+    // Check if we should pause scheduling due to low buffer (but keep playback state intact)
+    // NEVER set isPlaying=false or reset nextPlayTime/nextPlaybackSeq
     if (this.isPlaying && this.jitterBuffer.size < LOW_BUFFER_THRESHOLD) {
-      this.cleanupPlayback();
-      console.log('[Voice Gateway] Playback paused (low buffer)');
-      return;
+      if (!this.isSchedulingPaused) {
+        // Pause scheduling but keep all state intact
+        this.isSchedulingPaused = true;
+        console.log(`[Voice Gateway] Scheduling paused (low buffer: ${this.jitterBuffer.size} packets) - state preserved`);
+      }
+      return; // Don't schedule new packets, but don't reset anything
+    }
+    
+    // Check if we should resume scheduling if buffer refilled
+    // Do NOT reset nextPlayTime or nextPlaybackSeq - continue from where we left off
+    if (this.isPlaying && this.isSchedulingPaused && this.jitterBuffer.size >= LOW_BUFFER_THRESHOLD) {
+      this.isSchedulingPaused = false;
+      // Find the next available seq >= nextPlaybackSeq (don't reset to start)
+      const seqs = Array.from(this.jitterBuffer.keys()).sort((a, b) => a - b);
+      if (this.nextPlaybackSeq !== null) {
+        const nextSeq = seqs.find(seq => seq >= this.nextPlaybackSeq!);
+        if (nextSeq !== undefined) {
+          this.nextPlaybackSeq = nextSeq;
+        }
+        // If nextPlayTime is too far in the past, adjust it forward slightly
+        const now = this.audioContext.currentTime;
+        if (this.nextPlayTime! < now - 0.1) {
+          this.nextPlayTime = now + 0.05; // Small forward adjustment
+        }
+      }
+      console.log(`[Voice Gateway] Scheduling resumed from seq ${this.nextPlaybackSeq} (buffer: ${this.jitterBuffer.size} packets, speakerMuted=${this.isSpeakerMuted})`);
     }
 
     // Limit buffer size (remove oldest if too large)
@@ -281,15 +532,18 @@ export class VoiceGatewayService {
 
   /**
    * Schedule the next packet for playback
+   * IMPORTANT: Only schedules if not paused due to low buffer
    */
   private scheduleNextPacket(): void {
-    if (!this.audioContext || !this.isPlaying || this.nextPlaybackSeq === null || !this.playbackGainNode) {
+    if (!this.audioContext || !this.isPlaying || this.isSchedulingPaused || this.nextPlaybackSeq === null || !this.playbackGain) {
       return;
     }
 
     const now = this.audioContext.currentTime;
+    
+    // If nextPlayTime is in the future, wait
     if (this.nextPlayTime! > now + 0.01) {
-      return; // Wait
+      return;
     }
 
     // Find next consecutive packet
@@ -300,12 +554,12 @@ export class VoiceGatewayService {
       this.scheduleAudioChunk(packet!.payload);
       this.nextPlaybackSeq++;
 
-      // Update nextPlayTime for the next packet
-      this.nextPlayTime! += (FRAME_DURATION_MS / 1000); // Advance by 20ms
+      // Update nextPlayTime for the next packet (20ms = 0.02 seconds)
+      this.nextPlayTime! += 0.02;
       
-      // If we've fallen too far behind, reset nextPlayTime
-      if (this.nextPlayTime! < now) {
-        this.nextPlayTime = now + 0.05;
+      // If we've fallen too far behind, adjust nextPlayTime forward slightly (don't reset completely)
+      if (this.nextPlayTime! < now - 0.1) {
+        this.nextPlayTime = now + 0.05; // Small forward adjustment, don't reset
       }
     }
   }
@@ -314,7 +568,7 @@ export class VoiceGatewayService {
    * Schedule audio chunk for continuous playback
    */
   private scheduleAudioChunk(pcmData: ArrayBuffer): void {
-    if (!this.audioContext || !this.isPlaying || !this.playbackGainNode) {
+    if (!this.audioContext || !this.isPlaying || !this.playbackGain) {
       return;
     }
 
@@ -331,9 +585,11 @@ export class VoiceGatewayService {
       buffer.copyToChannel(float32Array, 0);
 
       // Create source and schedule
+      // All playback sources connect to playbackGain ONLY (not directly to destination)
+      // playbackGain controls speaker mute/unmute (gain.value = 0/1)
       const source = this.audioContext.createBufferSource();
       source.buffer = buffer;
-      source.connect(this.playbackGainNode!);
+      source.connect(this.playbackGain!);
       source.start(this.nextPlayTime!);
 
       // Track scheduled source for cleanup
@@ -358,6 +614,12 @@ export class VoiceGatewayService {
       this.playbackSchedulerInterval = null;
     }
     
+    // Stop stats logging
+    if (this.statsLogInterval) {
+      clearInterval(this.statsLogInterval);
+      this.statsLogInterval = null;
+    }
+    
     // Stop all scheduled sources
     this.scheduledSources.forEach(source => {
       try {
@@ -373,8 +635,51 @@ export class VoiceGatewayService {
     
     // Reset playback state
     this.isPlaying = false;
+    this.isSchedulingPaused = false;
     this.nextPlaybackSeq = null;
     this.nextPlayTime = null;
+    this.packetsRecvCount = 0;
+    
+    // DO NOT close audioContext - it should remain open for reuse
+    // The audioContext is managed separately and should only be closed on explicit endCall
+  }
+  
+  /**
+   * Close audio context (only call on explicit END CALL or page unload)
+   * This is the ONLY place where audioContext.close() should be called.
+   */
+  async closeAudioContext(): Promise<void> {
+    if (this.audioContext && this.audioContext.state !== 'closed') {
+      try {
+        await this.audioContext.close();
+        this.audioContext = null;
+        this.playbackGain = null;
+        console.log('[Voice Gateway] Audio context closed (end call)');
+      } catch (error: any) {
+        console.error('[Voice Gateway] Error closing audio context:', error);
+      }
+    }
+  }
+  
+  /**
+   * Log consolidated stats once per second
+   */
+  private logStats(): void {
+    const now = Date.now();
+    const packetsRecvPerSec = this.packetsRecvCount;
+    this.packetsRecvCount = 0; // Reset counter
+    
+    const audioCtxState = this.audioContext ? this.audioContext.state : 'null';
+    
+    // Calculate scheduledAheadMs (how far ahead we're scheduling)
+    let scheduledAheadMs = 0;
+    if (this.audioContext && this.nextPlayTime !== null) {
+      const aheadSeconds = this.nextPlayTime - this.audioContext.currentTime;
+      scheduledAheadMs = Math.round(aheadSeconds * 1000);
+    }
+    
+    // Consolidated stats log
+    console.log(`[Voice Gateway] Stats: packetsRecv/sec=${packetsRecvPerSec}, bufferDepth=${this.jitterBuffer.size}, scheduledAheadMs=${scheduledAheadMs}, playing=${this.isPlaying}, schedulingPaused=${this.isSchedulingPaused}, audioCtx.state=${audioCtxState}`);
   }
 
   /**

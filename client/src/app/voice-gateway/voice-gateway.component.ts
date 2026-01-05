@@ -21,7 +21,10 @@ const LOW_BUFFER_THRESHOLD = 6; // Pause if buffer drops below this
 function downsampleTo16k(inputFloat32: Float32Array, inputRate: number): Float32Array {
   if (inputRate === SAMPLE_RATE) {
     // Create a new Float32Array to ensure it's backed by ArrayBuffer (not SharedArrayBuffer)
-    return new Float32Array(inputFloat32);
+    // Copy the data to a new ArrayBuffer-backed Float32Array
+    const result = new Float32Array(inputFloat32.length);
+    result.set(inputFloat32);
+    return result;
   }
 
   const ratio = inputRate / SAMPLE_RATE;
@@ -697,9 +700,17 @@ export class VoiceGatewayComponent implements OnInit, OnDestroy {
 
         const inputData = e.inputBuffer.getChannelData(0);
         
-        let processedData = inputData;
+        // Copy to new Float32Array to ensure ArrayBuffer backing (not SharedArrayBuffer)
+        let processedData: Float32Array;
         if (inputSampleRate !== SAMPLE_RATE) {
-          processedData = downsampleTo16k(inputData, inputSampleRate);
+          // Create a copy first to ensure ArrayBuffer backing
+          const inputCopy = new Float32Array(inputData.length);
+          inputCopy.set(inputData);
+          processedData = downsampleTo16k(inputCopy, inputSampleRate);
+        } else {
+          // Create a copy to ensure ArrayBuffer backing
+          processedData = new Float32Array(inputData.length);
+          processedData.set(inputData);
         }
         
         const newAcc = new Float32Array(txAcc.length + processedData.length);

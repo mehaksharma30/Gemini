@@ -2295,8 +2295,11 @@ export class PanicComponent implements OnInit, OnDestroy {
         await this.panicCallService.leaveCallGroup(this.currentCallId);
       }
       
-      // Cleanup audio communication
-      await this.audioCommService.cleanup();
+      // Cleanup audio communication (endCall=true to close audio contexts)
+      await this.audioCommService.cleanup(true);
+      
+      // Also close Voice Gateway audio context on explicit end call
+      await this.voiceGatewayService.closeAudioContext();
       
       // Clear broadcast timeout
       if (this.broadcastCallTimeout) {
