@@ -20,7 +20,8 @@ const LOW_BUFFER_THRESHOLD = 6; // Pause if buffer drops below this
 // Downsample audio to 16kHz using linear interpolation
 function downsampleTo16k(inputFloat32: Float32Array, inputRate: number): Float32Array {
   if (inputRate === SAMPLE_RATE) {
-    return inputFloat32;
+    // Create a new Float32Array to ensure it's backed by ArrayBuffer (not SharedArrayBuffer)
+    return new Float32Array(inputFloat32);
   }
 
   const ratio = inputRate / SAMPLE_RATE;
