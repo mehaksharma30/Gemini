@@ -89,6 +89,8 @@ const io = new Server(httpServer, {
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
   },
+  transports: ['websocket', 'polling'], // Explicitly allow both transports
+  path: '/socket.io', // Explicit Socket.IO path (default, but making it explicit)
 });
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

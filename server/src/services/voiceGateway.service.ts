@@ -42,17 +42,21 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         }
       }
       
-      // Log connection attempts for debugging
+      // Log connection attempts for debugging (PRODUCTION CRITICAL)
       const pathname = info.req.url?.split('?')[0] || '';
       const origin = info.origin || 'unknown origin';
       const host = info.req.headers.host || 'unknown';
       const userAgent = info.req.headers['user-agent'] || 'unknown';
+      const xForwardedFor = info.req.headers['x-forwarded-for'] || 'none';
+      const xForwardedProto = info.req.headers['x-forwarded-proto'] || 'none';
       
       console.log(`[Voice Gateway] 🔄 Connection attempt from ${origin}`);
       console.log(`[Voice Gateway] Path: ${pathname}, Full URL: ${info.req.url}`);
       console.log(`[Voice Gateway] Host: ${host}, Secure: ${info.secure}`);
+      console.log(`[Voice Gateway] X-Forwarded-For: ${xForwardedFor}, X-Forwarded-Proto: ${xForwardedProto}`);
       console.log(`[Voice Gateway] Upgrade header: ${info.req.headers.upgrade}`);
       console.log(`[Voice Gateway] Connection header: ${info.req.headers.connection}`);
+      console.log(`[Voice Gateway] User-Agent: ${userAgent.substring(0, 100)}`);
       
       // Check path
       if (pathname !== '/voice-gateway' && pathname !== '/voice-gateway/') {
@@ -79,15 +83,26 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
   
   // Handle WebSocket server errors
   wss.on('error', (error: Error) => {
-    console.error('[Voice Gateway] WebSocket server error:', error);
+    console.error('[Voice Gateway] ❌ WebSocket server error:', error);
+    console.error('[Voice Gateway] Error stack:', error.stack);
   });
   
   // Log when server is ready
   wss.on('listening', () => {
-    console.log('[Voice Gateway] WebSocket server is listening and ready for connections');
+    console.log('[Voice Gateway] ✅ WebSocket server is listening and ready for connections');
+    console.log('[Voice Gateway] Server path: /voice-gateway');
+    console.log('[Voice Gateway] Server address:', wss.address());
   });
 
   wss.on('connection', (ws: WebSocket, req) => {
+    // Log connection established
+    const connectionTime = Date.now();
+    const pathname = req.url?.split('?')[0] || '';
+    console.log(`[Voice Gateway] ✅ WebSocket connection established at ${new Date().toISOString()}`);
+    console.log(`[Voice Gateway] Connection path: ${pathname}`);
+    console.log(`[Voice Gateway] Full request URL: ${req.url}`);
+    console.log(`[Voice Gateway] Request headers:`, JSON.stringify(req.headers, null, 2));
+    
     // Parse query parameters from URL
     let callId: string | null = null;
     let userId: string | null = null;
@@ -95,9 +110,12 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     try {
       // Try using URL constructor first
       const host = req.headers.host || 'localhost';
-      const url = new URL(req.url || '', `http://${host}`);
+      const protocol = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+      const url = new URL(req.url || '', `${protocol}://${host}`);
       callId = url.searchParams.get('callId');
       userId = url.searchParams.get('userId');
+      
+      console.log(`[Voice Gateway] Parsed query params - callId: ${callId}, userId: ${userId}`);
     } catch (error) {
       // Fallback: manual parsing
       const match = req.url?.match(/[?&]callId=([^&]+)/);
