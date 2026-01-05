@@ -164,6 +164,10 @@ export class VoiceGatewayService {
         console.log(`[Voice Gateway] Attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts}`);
         
         // Ensure no existing connection (should already be cleaned up in connect(), but double-check)
+        // Store previous state for logging before nulling
+        const prevWs = this.ws;
+        const prevWsState = prevWs ? `exists, readyState=${prevWs.readyState}` : 'null';
+        
         if (this.ws) {
           console.warn('[Voice Gateway] WARNING: Existing WebSocket found in attemptConnection, cleaning up');
           this.ws.onopen = null;
@@ -179,7 +183,7 @@ export class VoiceGatewayService {
         // Create new WebSocket connection
         // CRITICAL: Log WebSocket creation to detect duplicates
         console.log(`[Voice Gateway] 🔌 Creating new WebSocket connection (callId: ${this.callId}, userId: ${this.userId})`);
-        console.log(`[Voice Gateway] Previous WebSocket state: ${this.ws ? `exists, readyState=${this.ws.readyState}` : 'null'}`);
+        console.log(`[Voice Gateway] Previous WebSocket state: ${prevWsState}`);
         
         this.ws = new WebSocket(url);
         
