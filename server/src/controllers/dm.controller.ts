@@ -87,7 +87,7 @@ export const getOrCreateConversation = async (req: Request, res: Response) => {
     return res.json({
       success: true,
       data: {
-        conversationId: conversation._id.toString(),
+        conversationId: (conversation._id as mongoose.Types.ObjectId).toString(),
         otherParticipant: {
           id: (otherUser._id as mongoose.Types.ObjectId).toString(),
           username: otherUser.username,
