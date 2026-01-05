@@ -204,6 +204,10 @@ export class AudioCommunicationService {
       this.audioProcessor = this.audioContext!.createScriptProcessor(4096, 1, 1);
       
       const inputSampleRate = this.audioContext!.sampleRate;
+      console.log(`[Audio Communication] Audio context sample rate: ${inputSampleRate}Hz, target: ${SAMPLE_RATE}Hz`);
+      if (inputSampleRate !== SAMPLE_RATE) {
+        console.log(`[Audio Communication] Resampling from ${inputSampleRate}Hz to ${SAMPLE_RATE}Hz will be applied`);
+      }
       
       // Create monitorGain for mic monitoring (fixed at 0, never reused for playback)
       const monitorGain = this.audioContext!.createGain();
@@ -271,10 +275,11 @@ export class AudioCommunicationService {
       };
 
       // Connect processor to monitorGain (fixed at 0, never reused for playback)
-      // DO NOT connect to audioContext.destination (causes echo)
+      // CRITICAL: DO NOT connect monitorGain to audioContext.destination (causes echo/feedback)
+      // The monitorGain is only used to keep the audio graph active, but should remain disconnected from output
       this.audioSource.connect(this.audioProcessor);
       this.audioProcessor.connect(monitorGain);
-      monitorGain.connect(this.audioContext!.destination);
+      // monitorGain is NOT connected to destination - this prevents echo/feedback
 
       this.currentState.isRecording = true;
       this.stateSubject.next({ ...this.currentState });

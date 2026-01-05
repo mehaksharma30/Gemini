@@ -96,9 +96,30 @@ export class VoiceGatewayService {
    * @param userId - User ID
    */
   async connect(callId: string, userId: string): Promise<void> {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      console.log('[Voice Gateway] Already connected');
-      return;
+    // CRITICAL: Clean up any existing connection and handlers to prevent duplicates
+    if (this.ws) {
+      console.log('[Voice Gateway] Cleaning up existing connection before new connection');
+      // Remove all handlers to prevent duplicate handlers
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onerror = null;
+      this.ws.onclose = null;
+      
+      // Close existing connection
+      if (this.ws.readyState !== WebSocket.CLOSED) {
+        this.ws.close();
+      }
+      this.ws = null;
+    }
+
+    // Clean up intervals to prevent duplicates
+    if (this.playbackSchedulerInterval) {
+      clearInterval(this.playbackSchedulerInterval);
+      this.playbackSchedulerInterval = null;
+    }
+    if (this.statsLogInterval) {
+      clearInterval(this.statsLogInterval);
+      this.statsLogInterval = null;
     }
 
     // Cancel any pending reconnection
@@ -129,15 +150,20 @@ export class VoiceGatewayService {
         console.log(`[Voice Gateway] 🔌 Connecting to: ${url}`);
         console.log(`[Voice Gateway] Attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts}`);
         
-        // Close existing connection if any
+        // Ensure no existing connection (should already be cleaned up in connect(), but double-check)
         if (this.ws) {
-          this.ws.onclose = null; // Remove handlers to prevent reconnection loop
+          console.warn('[Voice Gateway] WARNING: Existing WebSocket found in attemptConnection, cleaning up');
+          this.ws.onopen = null;
+          this.ws.onmessage = null;
           this.ws.onerror = null;
+          this.ws.onclose = null;
           if (this.ws.readyState !== WebSocket.CLOSED) {
             this.ws.close();
           }
+          this.ws = null;
         }
         
+        // Create new WebSocket connection
         this.ws = new WebSocket(url);
         
         // Connection lifecycle logging
@@ -162,6 +188,13 @@ export class VoiceGatewayService {
               console.warn('[Voice Gateway] Audio context was closed, creating new one');
             }
             this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+            
+            // Log sample rate for debugging
+            console.log(`[Voice Gateway] Audio context created: ${this.audioContext.sampleRate}Hz, state: ${this.audioContext.state}`);
+            console.log(`[Voice Gateway] Target sample rate: ${SAMPLE_RATE}Hz`);
+            if (this.audioContext.sampleRate !== SAMPLE_RATE) {
+              console.warn(`[Voice Gateway] WARNING: Sample rate mismatch! Context: ${this.audioContext.sampleRate}Hz, Target: ${SAMPLE_RATE}Hz. Resampling will be applied.`);
+            }
             
             // Ensure context is running
             if (this.audioContext.state === 'suspended') {
@@ -188,12 +221,15 @@ export class VoiceGatewayService {
           }
           
           // Start stats logging interval (once per second)
-          if (!this.statsLogInterval) {
-            this.lastLogTime = Date.now();
-            this.statsLogInterval = setInterval(() => {
-              this.logStats();
-            }, 1000);
+          // CRITICAL: Clear any existing interval first to prevent duplicates
+          if (this.statsLogInterval) {
+            clearInterval(this.statsLogInterval);
+            this.statsLogInterval = null;
           }
+          this.lastLogTime = Date.now();
+          this.statsLogInterval = setInterval(() => {
+            this.logStats();
+          }, 1000);
           
           resolve();
         };
@@ -612,11 +648,14 @@ export class VoiceGatewayService {
         
         // Start periodic scheduler (every 20ms)
         // IMPORTANT: Scheduler continues even when muted - playbackGain controls silence
-        if (!this.playbackSchedulerInterval) {
-          this.playbackSchedulerInterval = setInterval(() => {
-            this.scheduleNextPacket();
-          }, FRAME_DURATION_MS);
+        // CRITICAL: Clear any existing interval first to prevent duplicates
+        if (this.playbackSchedulerInterval) {
+          clearInterval(this.playbackSchedulerInterval);
+          this.playbackSchedulerInterval = null;
         }
+        this.playbackSchedulerInterval = setInterval(() => {
+          this.scheduleNextPacket();
+        }, FRAME_DURATION_MS);
       } else {
         return; // Wait for more packets
       }
@@ -708,12 +747,21 @@ export class VoiceGatewayService {
       const int16Array = new Int16Array(pcmData);
       const float32Array = new Float32Array(int16Array.length);
       for (let i = 0; i < int16Array.length; i++) {
+        // Convert Int16 (-32768 to 32767) to Float32 (-1.0 to 1.0)
         float32Array[i] = int16Array[i] / (int16Array[i] < 0 ? 0x8000 : 0x7FFF);
       }
 
-      // Create audio buffer
-      const buffer = this.audioContext.createBuffer(1, float32Array.length, SAMPLE_RATE);
+      // Create audio buffer with correct sample rate
+      // CRITICAL: Use audioContext.sampleRate, not SAMPLE_RATE constant
+      // The buffer sample rate must match the audioContext sample rate
+      const bufferSampleRate = this.audioContext.sampleRate;
+      const buffer = this.audioContext.createBuffer(1, float32Array.length, bufferSampleRate);
       buffer.copyToChannel(float32Array, 0);
+      
+      // Log sample rate mismatch if detected (first few times only)
+      if (bufferSampleRate !== SAMPLE_RATE && this.packetsRecvCount < 10) {
+        console.warn(`[Voice Gateway] Sample rate mismatch in playback: buffer=${bufferSampleRate}Hz, source=${SAMPLE_RATE}Hz. Audio may be speeded/slowed.`);
+      }
 
       // Create source and schedule
       // All playback sources connect to playbackGain ONLY (not directly to destination)
