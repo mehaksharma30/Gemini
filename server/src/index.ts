@@ -114,7 +114,13 @@ app.use('/api/alerts', alertsRoutes);
 app.use('/api/webpubsub', webPubSubRoutes);
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'MindMemos API is running' });
+  res.json({ 
+    status: 'OK', 
+    message: 'MindMemos API is running',
+    port: PORT,
+    environment: process.env.NODE_ENV || 'development',
+    websocket: true
+  });
 });
 
 // Health check for Voice Gateway WebSocket endpoint
@@ -123,7 +129,8 @@ app.get('/voice-gateway/health', (req, res) => {
     status: 'OK', 
     message: 'Voice Gateway WebSocket endpoint is available',
     websocket: true,
-    path: '/voice-gateway'
+    supportedPaths: ['/voice-gateway', '/vo_<session>'],
+    port: PORT
   });
 });
 
