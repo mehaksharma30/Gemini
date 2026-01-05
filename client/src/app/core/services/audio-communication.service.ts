@@ -55,6 +55,7 @@ export class AudioCommunicationService {
   private audioProcessor: ScriptProcessorNode | null = null;
   private audioSource: MediaStreamAudioSourceNode | null = null;
   private micTrack: MediaStreamTrack | null = null; // Store mic track for soft mute
+  private captureStarted: boolean = false; // Track capture state
   
   private stateSubject = new Subject<AudioStreamState>();
   private errorSubject = new Subject<string>();
@@ -124,11 +125,13 @@ export class AudioCommunicationService {
         throw new Error('Failed to establish Voice Gateway connection');
       }
 
-      // Initialize audio context (use from Voice Gateway or create new)
-      this.audioContext = this.voiceGatewayService.getAudioContext() || 
-        new (window.AudioContext || (window as any).webkitAudioContext)();
+      // CRITICAL: Create new audio context if null or closed (don't reuse closed context)
+      if (!this.audioContext || this.audioContext.state === 'closed') {
+        this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        console.log(`[Audio Communication] Audio context created: ${this.audioContext.sampleRate}Hz, state: ${this.audioContext.state}`);
+      }
 
-      // Resume audio context if suspended (required by some browsers)
+      // Resume if suspended
       if (this.audioContext.state === 'suspended') {
         await this.audioContext.resume();
       }
@@ -136,6 +139,7 @@ export class AudioCommunicationService {
       // Reset accumulator
       this.txAcc = new Float32Array(0);
       this.seqCounter = 0;
+      this.captureStarted = false; // Reset capture state
 
       // Update connection state
       this.currentState.isConnected = true;
@@ -150,12 +154,13 @@ export class AudioCommunicationService {
   }
 
   /**
-   * Start recording and sending audio
+   * Start recording and sending audio - IDEMPOTENT
+   * Guarantees capture pipeline is wired correctly
    */
   async startRecording(): Promise<void> {
     try {
-      if (this.currentState.isRecording) {
-        console.log('[Audio Communication] Already recording');
+      if (this.currentState.isRecording && this.captureStarted) {
+        console.log('[Audio Communication] Already recording and capture started');
         return;
       }
 
@@ -163,11 +168,11 @@ export class AudioCommunicationService {
         throw new Error('Not initialized. Call initialize() first.');
       }
 
-      // Wait for connection to be ready
+      // Wait for connection
       if (!this.voiceGatewayService.isConnected()) {
         console.log('[Audio Communication] Waiting for Voice Gateway connection...');
         let connected = false;
-        for (let i = 0; i < 30; i++) { // Wait up to 3 seconds
+        for (let i = 0; i < 30; i++) {
           if (this.voiceGatewayService.isConnected()) {
             connected = true;
             break;
@@ -182,9 +187,36 @@ export class AudioCommunicationService {
       
       console.log('[Audio Communication] ✅ Voice Gateway connection verified');
 
+      // CRITICAL: Ensure audio context is ready
+      if (!this.audioContext || this.audioContext.state === 'closed') {
+        this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        console.log(`[Audio Communication] Audio context recreated: ${this.audioContext.sampleRate}Hz`);
+      }
+
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+      }
+
+      // CRITICAL: Clean up any existing capture pipeline before starting new one
+      if (this.audioProcessor) {
+        this.audioProcessor.disconnect();
+        this.audioProcessor.onaudioprocess = null;
+        this.audioProcessor = null;
+      }
+      if (this.audioSource) {
+        this.audioSource.disconnect();
+        this.audioSource = null;
+      }
+      if (this.mediaStream) {
+        this.mediaStream.getTracks().forEach(track => track.stop());
+        this.mediaStream = null;
+      }
+      this.micTrack = null;
+      this.captureStarted = false;
+
       console.log('[Audio Communication] Requesting microphone access...');
       
-      // Get user media (microphone)
+      // Get user media
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -197,104 +229,25 @@ export class AudioCommunicationService {
       
       console.log('[Audio Communication] Microphone access granted');
 
-      // Store mic track for soft mute (enable/disable, never stop)
+      // Store mic track
       this.micTrack = this.mediaStream.getAudioTracks()[0] || null;
       if (!this.micTrack) {
         throw new Error('No audio track found in media stream');
       }
       
-      // DIAGNOSTIC: Log mic track state
-      console.log(`[Audio Communication] 🎤 Mic track initialized: enabled=${this.micTrack.enabled}, readyState=${this.micTrack.readyState}, muted=${this.micTrack.muted}, label=${this.micTrack.label}`);
+      console.log(`[Audio Communication] 🎤 Mic track: enabled=${this.micTrack.enabled}, readyState=${this.micTrack.readyState}, label=${this.micTrack.label}`);
       
-      // Use Web Audio API to capture PCM audio for real-time streaming
-      this.audioSource = this.audioContext!.createMediaStreamSource(this.mediaStream);
-      this.audioProcessor = this.audioContext!.createScriptProcessor(4096, 1, 1);
-      
-      const inputSampleRate = this.audioContext!.sampleRate;
-      console.log(`[Audio Communication] Audio context sample rate: ${inputSampleRate}Hz, target: ${SAMPLE_RATE}Hz`);
-      if (inputSampleRate !== SAMPLE_RATE) {
-        console.log(`[Audio Communication] Resampling from ${inputSampleRate}Hz to ${SAMPLE_RATE}Hz will be applied`);
-      }
-      
-      // Create monitorGain for mic monitoring (fixed at 0, never reused for playback)
-      const monitorGain = this.audioContext!.createGain();
-      monitorGain.gain.value = 0; // Always silent for monitoring
-      
-      this.audioProcessor.onaudioprocess = (e) => {
-        // SOFT MUTE: Keep onaudioprocess running, but gate sending via boolean check
-        // Do NOT return early - keep processing pipeline active
-        if (!this.voiceGatewayService.isConnected()) {
-          return; // Only skip if not connected
-        }
-        
-        // If muted, still process but don't send (soft gate)
-        if (this.currentState.isMuted) {
-          return; // Soft gate: process continues but no sending
-        }
-
-        const inputData = e.inputBuffer.getChannelData(0);
-        
-        // Downsample if needed
-        // Copy to new Float32Array to ensure ArrayBuffer backing (not SharedArrayBuffer)
-        let processedData: Float32Array;
-        if (inputSampleRate !== SAMPLE_RATE) {
-          // Create a copy first to ensure ArrayBuffer backing
-          const inputCopy = new Float32Array(inputData.length);
-          inputCopy.set(inputData);
-          processedData = downsampleTo16k(inputCopy, inputSampleRate);
-        } else {
-          // Create a copy to ensure ArrayBuffer backing
-          processedData = new Float32Array(inputData.length);
-          processedData.set(inputData);
-        }
-        
-        // Append to accumulator
-        const newAcc = new Float32Array(this.txAcc.length + processedData.length);
-        newAcc.set(this.txAcc, 0);
-        newAcc.set(processedData, this.txAcc.length);
-        this.txAcc = newAcc;
-
-        // Process complete frames (320 samples each)
-        while (this.txAcc.length >= SAMPLES_PER_FRAME) {
-          // Extract exactly 320 samples
-          const frame = this.txAcc.slice(0, SAMPLES_PER_FRAME);
-          this.txAcc = this.txAcc.slice(SAMPLES_PER_FRAME);
-
-          // Convert Float32 to Int16
-          const pcm16 = new Int16Array(SAMPLES_PER_FRAME);
-          for (let i = 0; i < SAMPLES_PER_FRAME; i++) {
-            const sample = Math.max(-1, Math.min(1, frame[i]));
-            pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-          }
-
-          // Send packet via Voice Gateway
-          try {
-            if (this.voiceGatewayService.isConnected()) {
-              this.voiceGatewayService.sendAudioPacket(pcm16);
-            }
-          } catch (error: any) {
-            // Only log if it's not a disconnection error (expected during cleanup)
-            if (!error.message?.includes('not connected') && !error.message?.includes('disconnected')) {
-              console.error('[Audio Communication] Error sending audio:', error);
-            }
-          }
-        }
-      };
-
-      // Connect processor to monitorGain (fixed at 0, never reused for playback)
-      // CRITICAL: DO NOT connect monitorGain to audioContext.destination (causes echo/feedback)
-      // The monitorGain is only used to keep the audio graph active, but should remain disconnected from output
-      this.audioSource.connect(this.audioProcessor);
-      this.audioProcessor.connect(monitorGain);
-      // monitorGain is NOT connected to destination - this prevents echo/feedback
+      // CRITICAL: Wire capture pipeline - idempotent startCaptureAndSend()
+      this.startCaptureAndSend();
 
       this.currentState.isRecording = true;
+      this.captureStarted = true;
       this.stateSubject.next({ ...this.currentState });
 
-      // Start diagnostic logging interval (once per second)
+      // Start diagnostic logging
       this.startMicStatsLogging();
 
-      console.log('[Audio Communication] Recording started');
+      console.log('[Audio Communication] ✅ Recording started, capture pipeline active');
     } catch (error: any) {
       console.error('[Audio Communication] Start recording error:', error);
       this.errorSubject.next(error.message || 'Failed to start recording');
@@ -321,13 +274,13 @@ export class AudioCommunicationService {
         this.audioSource = null;
       }
 
-      // SOFT CLEANUP: Only stop tracks on explicit stopRecording (not on mute)
-      // For mute, we use track.enabled = false instead
+      // Stop tracks
       if (this.mediaStream) {
         this.mediaStream.getTracks().forEach(track => track.stop());
         this.mediaStream = null;
       }
       this.micTrack = null;
+      this.captureStarted = false; // Reset capture state
 
       // Clear accumulator
       this.txAcc = new Float32Array(0);
@@ -338,11 +291,94 @@ export class AudioCommunicationService {
       this.currentState.isRecording = false;
       this.stateSubject.next({ ...this.currentState });
 
-      console.log('[Audio Communication] Recording stopped');
+      console.log('[Audio Communication] Recording stopped, capture pipeline cleared');
     } catch (error: any) {
       console.error('[Audio Communication] Stop recording error:', error);
       this.errorSubject.next(error.message || 'Failed to stop recording');
     }
+  }
+
+  /**
+   * IDEMPOTENT: Wire getUserMedia -> processor -> sendAudioPacket
+   * Guaranteed to be called right after mic access is granted
+   */
+  private startCaptureAndSend(): void {
+    if (!this.mediaStream || !this.audioContext || this.audioContext.state === 'closed') {
+      console.error('[Audio Communication] Cannot start capture: missing stream or invalid context');
+      return;
+    }
+
+    // Create audio source and processor
+    this.audioSource = this.audioContext.createMediaStreamSource(this.mediaStream);
+    this.audioProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
+    
+    const inputSampleRate = this.audioContext.sampleRate;
+    console.log(`[Audio Communication] Capture pipeline: sampleRate=${inputSampleRate}Hz, target=${SAMPLE_RATE}Hz`);
+    
+    // Create monitorGain (not connected to destination to prevent echo)
+    const monitorGain = this.audioContext.createGain();
+    monitorGain.gain.value = 0;
+    
+    // CRITICAL: Wire onaudioprocess handler - this is where packets are sent
+    this.audioProcessor.onaudioprocess = (e) => {
+      if (!this.voiceGatewayService.isConnected()) {
+        return;
+      }
+      
+      // Soft mute gate
+      if (this.currentState.isMuted) {
+        return;
+      }
+
+      const inputData = e.inputBuffer.getChannelData(0);
+      
+      let processedData: Float32Array;
+      if (inputSampleRate !== SAMPLE_RATE) {
+        const inputCopy = new Float32Array(inputData.length);
+        inputCopy.set(inputData);
+        processedData = downsampleTo16k(inputCopy, inputSampleRate);
+      } else {
+        processedData = new Float32Array(inputData.length);
+        processedData.set(inputData);
+      }
+      
+      // Append to accumulator
+      const newAcc = new Float32Array(this.txAcc.length + processedData.length);
+      newAcc.set(this.txAcc, 0);
+      newAcc.set(processedData, this.txAcc.length);
+      this.txAcc = newAcc;
+
+      // Process complete frames (320 samples each)
+      while (this.txAcc.length >= SAMPLES_PER_FRAME) {
+        const frame = this.txAcc.slice(0, SAMPLES_PER_FRAME);
+        this.txAcc = this.txAcc.slice(SAMPLES_PER_FRAME);
+
+        // Convert Float32 to Int16
+        const pcm16 = new Int16Array(SAMPLES_PER_FRAME);
+        for (let i = 0; i < SAMPLES_PER_FRAME; i++) {
+          const sample = Math.max(-1, Math.min(1, frame[i]));
+          pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+        }
+
+        // CRITICAL: Send packet - this increments packetsSentCount
+        try {
+          if (this.voiceGatewayService.isConnected()) {
+            this.voiceGatewayService.sendAudioPacket(pcm16);
+          }
+        } catch (error: any) {
+          if (!error.message?.includes('not connected') && !error.message?.includes('disconnected')) {
+            console.error('[Audio Communication] Error sending audio:', error);
+          }
+        }
+      }
+    };
+
+    // Connect pipeline
+    this.audioSource.connect(this.audioProcessor);
+    this.audioProcessor.connect(monitorGain);
+    // monitorGain NOT connected to destination (prevents echo)
+    
+    console.log('[Audio Communication] ✅ Capture pipeline wired, packets will be sent when speaking');
   }
 
   // Note: Remote audio playback is handled by VoiceGatewayService (jitter buffer)
@@ -405,26 +441,21 @@ export class AudioCommunicationService {
     try {
       await this.stopRecording();
       
-      // Disconnect from Voice Gateway
       await this.voiceGatewayService.disconnect();
       
-      if (this.audioContext) {
-        // Only close audio context on explicit END CALL
-        // For mute/unmute or temporary cleanup, use suspend() instead
-        if (endCall) {
-          await this.audioContext.close();
-          console.log('[Audio Communication] Audio context closed (end call)');
-        } else {
-          // Suspend instead of close for non-terminal actions
-          if (this.audioContext.state !== 'closed') {
-            await this.audioContext.suspend();
-            console.log('[Audio Communication] Audio context suspended (not end call)');
-          }
-        }
+      // CRITICAL: On end-call, set audioContext to null (don't close it)
+      // On next init, a fresh context will be created cleanly
+      if (endCall) {
+        console.log('[Audio Communication] End call: setting audioContext to null (will create fresh on next init)');
         this.audioContext = null;
+      } else {
+        // For non-end-call cleanup, keep context but suspend if needed
+        if (this.audioContext && this.audioContext.state !== 'closed') {
+          await this.audioContext.suspend();
+          console.log('[Audio Communication] Audio context suspended (not end call)');
+        }
       }
       
-      // Stop diagnostic logging
       this.stopMicStatsLogging();
       
       this.callId = '';
@@ -432,6 +463,7 @@ export class AudioCommunicationService {
       this.targetUserId = '';
       this.txAcc = new Float32Array(0);
       this.seqCounter = 0;
+      this.captureStarted = false;
       
       this.currentState = {
         isRecording: false,

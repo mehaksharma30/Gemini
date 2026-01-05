@@ -261,19 +261,26 @@ export class PanicCallService {
    * Send call end signal
    */
   async sendCallEnd(callId: string, reason?: string): Promise<void> {
+    // CRITICAL: Guard - only send if client is connected
     if (!this.client || !this.isConnected) {
+      console.warn('[PanicCall] Cannot send call_end: client not connected');
       return;
     }
     
-    const callGroup = `call:${callId}`;
-    const message: CallSignal = {
-      type: 'call_end',
-      callId,
-      reason,
-    };
-    
-    await this.client.sendToGroup(callGroup, message, 'json');
-    console.log('[PanicCall] Sent call end');
+    try {
+      const callGroup = `call:${callId}`;
+      const message: CallSignal = {
+        type: 'call_end',
+        callId,
+        reason,
+      };
+      
+      await this.client.sendToGroup(callGroup, message, 'json');
+      console.log('[PanicCall] Sent call end');
+    } catch (error: any) {
+      // CRITICAL: Don't throw - just log (prevents double "Ending call" attempts)
+      console.error('[PanicCall] Error sending call_end (non-fatal):', error.message || error);
+    }
   }
 
   /**

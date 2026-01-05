@@ -86,6 +86,7 @@ export class VoiceGatewayService {
   private activeCallId: string | null = null;
   private activeUserId: string | null = null;
   private onmessageHandlerAttached: boolean = false;
+  private currentWs: WebSocket | null = null; // Track current WS to prevent duplicate handlers
 
   // Connection state
   private connectedSubject = new BehaviorSubject<boolean>(false);
@@ -116,8 +117,6 @@ export class VoiceGatewayService {
     // CRITICAL: If connecting to different call, close previous connection first
     if (this.ws && (this.activeCallId !== callId || this.activeUserId !== userId)) {
       console.log(`[Voice Gateway] 🔄 Switching calls: ${this.activeCallId}/${this.activeUserId} -> ${callId}/${userId}`);
-      console.log(`[Voice Gateway] 🧹 Cleaning up previous connection`);
-      console.log(`[Voice Gateway] Previous connection: callId=${this.activeCallId}, userId=${this.activeUserId}, readyState=${this.ws.readyState}`);
       
       // Remove all handlers to prevent duplicate handlers
       this.ws.onopen = null;
@@ -125,11 +124,10 @@ export class VoiceGatewayService {
       this.ws.onerror = null;
       this.ws.onclose = null;
       this.onmessageHandlerAttached = false;
-      console.log(`[Voice Gateway] 🧹 Removed all handlers from previous WebSocket`);
+      this.currentWs = null;
       
       // Close existing connection cleanly
       if (this.ws.readyState !== WebSocket.CLOSED && this.ws.readyState !== WebSocket.CLOSING) {
-        console.log(`[Voice Gateway] 🔌 Closing previous WebSocket connection`);
         this.ws.close(1000, 'Switching to new call');
       }
       this.ws = null;
@@ -182,66 +180,49 @@ export class VoiceGatewayService {
         console.log(`[Voice Gateway] 🔌 Connecting to: ${url}`);
         console.log(`[Voice Gateway] Attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts}`);
         
-        // Ensure no existing connection (should already be cleaned up in connect(), but double-check)
-        // Store previous state for logging before nulling
-        const prevWs = this.ws;
-        const prevWsState = prevWs ? `exists, readyState=${prevWs.readyState}` : 'null';
-        
+        // CRITICAL: Clear any existing WS and reset handler flag BEFORE creating new one
         if (this.ws) {
-          console.warn('[Voice Gateway] WARNING: Existing WebSocket found in attemptConnection, cleaning up');
           this.ws.onopen = null;
           this.ws.onmessage = null;
           this.ws.onerror = null;
           this.ws.onclose = null;
-          this.onmessageHandlerAttached = false;
           if (this.ws.readyState !== WebSocket.CLOSED && this.ws.readyState !== WebSocket.CLOSING) {
             this.ws.close();
           }
           this.ws = null;
         }
+        this.onmessageHandlerAttached = false;
+        this.currentWs = null;
         
         // Create new WebSocket connection
-        // CRITICAL: Log WebSocket creation to detect duplicates
-        console.log(`[Voice Gateway] 🔌 Creating new WebSocket connection`);
-        console.log(`[Voice Gateway] URL: ${url}`);
-        console.log(`[Voice Gateway] callId: ${this.callId}, userId: ${this.userId}`);
-        console.log(`[Voice Gateway] Previous WebSocket state: ${prevWsState}`);
-        console.log(`[Voice Gateway] Active call: ${this.activeCallId}, Active user: ${this.activeUserId}`);
-        
+        console.log(`[Voice Gateway] 🔌 Creating new WebSocket connection: ${url}`);
         this.ws = new WebSocket(url);
+        this.currentWs = this.ws; // Track current WS
         
-        // Connection lifecycle logging
         const connectionStartTime = Date.now();
-        console.log(`[Voice Gateway] WebSocket object created, readyState: ${this.ws.readyState}`);
 
+        // CRITICAL: Use direct assignment (ws.onopen = handler), NOT addEventListener
         this.ws.onopen = () => {
           const connectionTime = Date.now() - connectionStartTime;
           console.log(`[Voice Gateway] ✅ Connected successfully (${connectionTime}ms)`);
-          console.log(`[Voice Gateway] WebSocket readyState: ${this.ws?.readyState}, URL: ${url}`);
           
-          // Reset reconnection state on successful connection
+          // Reset reconnection state
           this.reconnectAttempts = 0;
           this.reconnectDelay = 1000;
           this.isReconnecting = false;
           
           this.connectedSubject.next(true);
           
-          // Initialize audio context for playback (separate from audio-communication service)
+          // Initialize audio context for playback
+          // CRITICAL: Do NOT close existing context, only create if null or closed
           if (!this.audioContext || this.audioContext.state === 'closed') {
-            // If context was closed, create a new one
             if (this.audioContext && this.audioContext.state === 'closed') {
               console.warn('[Voice Gateway] Audio context was closed, creating new one');
             }
             this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
             
-            // Log sample rate for debugging
             console.log(`[Voice Gateway] Audio context created: ${this.audioContext.sampleRate}Hz, state: ${this.audioContext.state}`);
-            console.log(`[Voice Gateway] Target sample rate: ${SAMPLE_RATE}Hz`);
-            if (this.audioContext.sampleRate !== SAMPLE_RATE) {
-              console.warn(`[Voice Gateway] WARNING: Sample rate mismatch! Context: ${this.audioContext.sampleRate}Hz, Target: ${SAMPLE_RATE}Hz. Resampling will be applied.`);
-            }
             
-            // Ensure context is running
             if (this.audioContext.state === 'suspended') {
               this.audioContext.resume().then(() => {
                 console.log('[Voice Gateway] Audio context resumed, state:', this.audioContext!.state);
@@ -250,23 +231,12 @@ export class VoiceGatewayService {
               });
             }
             
-            // Create dedicated playbackGain node for remote audio playback (speaker mute/unmute)
             this.playbackGain = this.audioContext.createGain();
-            this.playbackGain.gain.value = 1.0; // Start unmuted
+            this.playbackGain.gain.value = 1.0;
             this.playbackGain.connect(this.audioContext.destination);
-            console.log('[Voice Gateway] Audio context initialized:', this.audioContext.sampleRate, 'Hz, state:', this.audioContext.state);
-            
-            // Monitor audio context state changes
-            this.audioContext.addEventListener('statechange', () => {
-              console.log('[Voice Gateway] Audio context state changed to:', this.audioContext!.state);
-              if (this.audioContext!.state === 'closed') {
-                console.error('[Voice Gateway] WARNING: Audio context was closed! This should not happen.');
-              }
-            });
           }
           
-          // Start stats logging interval (once per second)
-          // CRITICAL: Clear any existing interval first to prevent duplicates
+          // Start stats logging interval
           if (this.statsLogInterval) {
             clearInterval(this.statsLogInterval);
             this.statsLogInterval = null;
@@ -279,17 +249,28 @@ export class VoiceGatewayService {
           resolve();
         };
 
-        // CRITICAL: Ensure onmessage handler is attached ONLY ONCE
-        if (this.onmessageHandlerAttached) {
-          console.error('[Voice Gateway] ❌ ERROR: onmessage handler already attached! This should not happen.');
+        // CRITICAL: Attach onmessage handler ONLY if not already attached to THIS WebSocket
+        if (this.onmessageHandlerAttached && this.currentWs === this.ws) {
+          console.error('[Voice Gateway] ❌ ERROR: onmessage handler already attached to current WebSocket!');
+          reject(new Error('Handler already attached'));
           return;
         }
         
-        // CRITICAL: Log when onmessage handler is attached
-        console.log(`[Voice Gateway] 📨 Attaching onmessage handler to WebSocket (callId: ${this.callId}, userId: ${this.userId})`);
+        // Reset flag when attaching to new WS
+        if (this.currentWs !== this.ws) {
+          this.onmessageHandlerAttached = false;
+        }
+        
+        console.log(`[Voice Gateway] 📨 Attaching onmessage handler to WebSocket`);
         this.onmessageHandlerAttached = true;
         
         this.ws.onmessage = async (event) => {
+          // CRITICAL: Verify this is still the current WS (prevent stale handler)
+          if (this.ws !== this.currentWs) {
+            console.warn('[Voice Gateway] ⚠️ Received message on stale WebSocket, ignoring');
+            return;
+          }
+          
           if (typeof event.data === 'string') {
             // Text message (connection confirmation)
             try {
@@ -369,54 +350,30 @@ export class VoiceGatewayService {
         };
 
         this.ws.onerror = (error: Event) => {
-          const connectionTime = Date.now() - connectionStartTime;
-          console.error(`[Voice Gateway] ❌ WebSocket error after ${connectionTime}ms:`, error);
-          console.error(`[Voice Gateway] Error details:`, {
-            type: error.type,
-            target: error.target,
-            readyState: this.ws?.readyState,
-            url: url
-          });
-          
+          console.error(`[Voice Gateway] ❌ WebSocket error:`, error);
           this.connectedSubject.next(false);
-          
-          // Don't reject immediately - let onclose handle reconnection
           if (!this.isReconnecting) {
             reject(new Error('WebSocket connection failed'));
           }
         };
-
-        // CRITICAL: Log when onclose handler is attached
-        console.log(`[Voice Gateway] 🔌 Attaching onclose handler to WebSocket`);
         
         this.ws.onclose = (event: CloseEvent) => {
           const connectionDuration = Date.now() - connectionStartTime;
           console.log(`[Voice Gateway] 🔌 WebSocket CLOSED (code: ${event.code}, reason: ${event.reason || 'none'}, duration: ${connectionDuration}ms)`);
-          console.log(`[Voice Gateway] Close event details:`, {
-            code: event.code,
-            reason: event.reason,
-            wasClean: event.wasClean,
-            readyState: this.ws?.readyState,
-            callId: this.callId,
-            userId: this.userId,
-            activeCallId: this.activeCallId,
-            activeUserId: this.activeUserId
-          });
           
           this.connectedSubject.next(false);
-          
-          // CRITICAL: Clean up playback state but do NOT close audioContext
-          // AudioContext should remain open for reuse
           this.cleanupPlayback();
           
-          // CRITICAL: Remove handlers to prevent duplicate handlers on reconnect
+          // CRITICAL: Remove handlers and reset flag
           if (this.ws) {
             this.ws.onopen = null;
             this.ws.onmessage = null;
             this.ws.onerror = null;
             this.ws.onclose = null;
-            this.onmessageHandlerAttached = false;
-            console.log(`[Voice Gateway] 🧹 Removed all WebSocket handlers`);
+          }
+          this.onmessageHandlerAttached = false;
+          if (this.ws === this.currentWs) {
+            this.currentWs = null;
           }
           
           // Clear active connection tracking
@@ -425,13 +382,9 @@ export class VoiceGatewayService {
             this.activeUserId = null;
           }
           
-          // Attempt reconnection if not a clean close and we should reconnect
+          // Attempt reconnection if not a clean close
           if (this.shouldReconnect && event.code !== 1000 && !event.wasClean) {
             this.scheduleReconnect();
-          } else if (event.code === 1000) {
-            console.log('[Voice Gateway] Clean close - not reconnecting');
-          } else {
-            console.log('[Voice Gateway] Reconnection disabled or max attempts reached');
           }
         };
       } catch (error: any) {
@@ -485,7 +438,6 @@ export class VoiceGatewayService {
    * Disconnect from Voice Gateway
    */
   async disconnect(): Promise<void> {
-    // Stop reconnection attempts
     this.shouldReconnect = false;
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
@@ -496,7 +448,6 @@ export class VoiceGatewayService {
     this.cleanupPlayback();
     
     if (this.ws) {
-      // Remove handlers to prevent reconnection
       this.ws.onclose = null;
       this.ws.onerror = null;
       if (this.ws.readyState !== WebSocket.CLOSED) {
@@ -505,8 +456,13 @@ export class VoiceGatewayService {
       this.ws = null;
     }
     
-    // Note: We don't close audioContext on disconnect to allow reconnection
-    // Only cleanup playback state, not the audio context itself
+    // CRITICAL: Reset handler flag and current WS
+    this.onmessageHandlerAttached = false;
+    this.currentWs = null;
+    
+    // CRITICAL: Do NOT close audioContext on disconnect - set to null for next init
+    this.audioContext = null;
+    this.playbackGain = null;
     
     this.connectedSubject.next(false);
     console.log('[Voice Gateway] Disconnected');
@@ -970,16 +926,17 @@ export class VoiceGatewayService {
    * This is the ONLY place where audioContext.close() should be called.
    */
   async closeAudioContext(): Promise<void> {
+    // CRITICAL: Only close if explicitly called (end call)
     if (this.audioContext && this.audioContext.state !== 'closed') {
       try {
         await this.audioContext.close();
-        this.audioContext = null;
-        this.playbackGain = null;
         console.log('[Voice Gateway] Audio context closed (end call)');
       } catch (error: any) {
         console.error('[Voice Gateway] Error closing audio context:', error);
       }
     }
+    this.audioContext = null;
+    this.playbackGain = null;
   }
   
   /**

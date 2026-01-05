@@ -2282,6 +2282,7 @@ export class PanicComponent implements OnInit, OnDestroy {
   }
 
   async endTestCall(): Promise<void> {
+    // CRITICAL: Prevent double "Ending call" attempts
     if (!this.isInTestCall) {
       return;
     }
@@ -2289,13 +2290,20 @@ export class PanicComponent implements OnInit, OnDestroy {
     try {
       console.log('[Testing Talk] Ending call...');
       
-      // Send call end signal
+      // CRITICAL: Set flag immediately to prevent double calls
+      this.isInTestCall = false;
+      
+      // Send call end signal (guarded in service)
       if (this.currentCallId) {
-        await this.panicCallService.sendCallEnd(this.currentCallId);
-        await this.panicCallService.leaveCallGroup(this.currentCallId);
+        await this.panicCallService.sendCallEnd(this.currentCallId).catch(err => {
+          console.warn('[Testing Talk] Failed to send call_end (non-fatal):', err);
+        });
+        await this.panicCallService.leaveCallGroup(this.currentCallId).catch(err => {
+          console.warn('[Testing Talk] Failed to leave call group (non-fatal):', err);
+        });
       }
       
-      // Cleanup audio communication (endCall=true to close audio contexts)
+      // Cleanup audio communication (endCall=true)
       await this.audioCommService.cleanup(true);
       
       // Also close Voice Gateway audio context on explicit end call
@@ -2307,7 +2315,6 @@ export class PanicComponent implements OnInit, OnDestroy {
         this.broadcastCallTimeout = null;
       }
       
-      this.isInTestCall = false;
       this.isTestCallConnected = false;
       this.callStatus = 'idle';
       this.currentCallId = '';
@@ -2649,11 +2656,17 @@ export class PanicComponent implements OnInit, OnDestroy {
       
       // Step 7: Start recording - ensure connection is ready
       console.log('[Call] Step 7: Starting recording...');
-      // Double-check connection before starting
+      
+      // CRITICAL: Wait a bit for connection to stabilize, then check
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
       const finalState = this.audioCommService.getState();
       if (!finalState.isConnected) {
+        // CRITICAL: Check if audioContext is null (will be recreated on startRecording)
+        // The connection check should account for audioContext being null and will reinitialize
         throw new Error('Audio connection not ready');
       }
+      
       await this.audioCommService.startRecording();
       
       this.callStatus = 'connected';
