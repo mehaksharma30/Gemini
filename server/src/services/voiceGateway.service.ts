@@ -594,8 +594,10 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
           }
         } catch (error: any) {
           // CRITICAL: Always log send errors (not rate-limited)
-          console.error(`[Voice Gateway] ❌ Error sending packet to ${otherConn.userId}:`, error.message, `CallId: ${otherConn.callId}, readyState: ${wsReadyState}, error type: ${error.constructor?.name}`);
-          skippedRecipients.push(`${otherConn.userId}(error: ${error.message})`);
+          const errorType = error && typeof error === 'object' && error.constructor ? error.constructor.name : typeof error;
+          const errorMessage = error?.message || String(error) || 'unknown error';
+          console.error(`[Voice Gateway] ❌ Error sending packet to ${otherConn.userId}:`, errorMessage, `CallId: ${otherConn.callId}, readyState: ${wsReadyState}, error type: ${errorType}`);
+          skippedRecipients.push(`${otherConn.userId}(error: ${errorMessage})`);
         }
       });
 
