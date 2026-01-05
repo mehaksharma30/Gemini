@@ -231,14 +231,28 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         return;
       }
 
+      // CRITICAL: Add senderId to packet to prevent loopback on client side
+      // Packet format: seq (4) + timestamp (8) + senderId (24) + payload (640) = 676 bytes
+      // Convert existing packet to new format with senderId
+      const senderId = conn.userId;
+      const senderIdBytes = Buffer.from(senderId.padEnd(24, '\0').slice(0, 24), 'utf8'); // Fixed 24 bytes
+      
+      // Create new packet with senderId
+      const packetWithSender = Buffer.alloc(676);
+      buffer.copy(packetWithSender, 0, 0, 12); // Copy seq + timestamp (12 bytes)
+      senderIdBytes.copy(packetWithSender, 12, 0, 24); // Add senderId (24 bytes)
+      buffer.copy(packetWithSender, 36, 12, 652); // Copy payload (640 bytes)
+
       // Relay to all other connections in the same room
+      // CRITICAL: Exclude sender (ws) to prevent loopback
       const room = rooms.get(conn.callId);
       if (!room) return;
 
       let relayed = 0;
       room.forEach((otherWs) => {
+        // CRITICAL: Do NOT send to sender (prevents loopback)
         if (otherWs !== ws && otherWs.readyState === WebSocket.OPEN) {
-          otherWs.send(buffer);
+          otherWs.send(packetWithSender);
           relayed++;
         }
       });

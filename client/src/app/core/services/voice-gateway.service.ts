@@ -7,7 +7,9 @@ const SAMPLE_RATE = 16000;
 const SAMPLES_PER_FRAME = 320; // 20ms at 16kHz
 const FRAME_DURATION_MS = 20;
 const PAYLOAD_SIZE = 640; // SAMPLES_PER_FRAME * 2 (Int16 = 2 bytes)
-const PACKET_SIZE = 12 + PAYLOAD_SIZE; // header (12) + payload (640)
+const PACKET_SIZE_OLD = 12 + PAYLOAD_SIZE; // Old format: header (12) + payload (640) = 652 bytes
+const PACKET_SIZE = 12 + 24 + PAYLOAD_SIZE; // New format: seq (4) + timestamp (8) + senderId (24) + payload (640) = 676 bytes
+const SENDER_ID_SIZE = 24; // Fixed 24 bytes for senderId
 
 // Jitter buffer settings
 const MIN_BUFFER_PACKETS = 25; // ~500ms buffer before starting playback
@@ -96,18 +98,29 @@ export class VoiceGatewayService {
    * @param userId - User ID
    */
   async connect(callId: string, userId: string): Promise<void> {
+    // CRITICAL: Ensure only ONE WebSocket connection per call
+    // If already connected to the same call, return early
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.callId === callId && this.userId === userId) {
+      console.log(`[Voice Gateway] ⚠️ Already connected to call ${callId} as ${userId}, skipping duplicate connection`);
+      return;
+    }
+    
     // CRITICAL: Clean up any existing connection and handlers to prevent duplicates
     if (this.ws) {
-      console.log('[Voice Gateway] Cleaning up existing connection before new connection');
+      console.log(`[Voice Gateway] 🧹 Cleaning up existing connection before new connection`);
+      console.log(`[Voice Gateway] Previous connection: callId=${this.callId}, userId=${this.userId}, readyState=${this.ws.readyState}`);
+      
       // Remove all handlers to prevent duplicate handlers
       this.ws.onopen = null;
       this.ws.onmessage = null;
       this.ws.onerror = null;
       this.ws.onclose = null;
+      console.log(`[Voice Gateway] 🧹 Removed all handlers from previous WebSocket`);
       
-      // Close existing connection
+      // Close existing connection cleanly
       if (this.ws.readyState !== WebSocket.CLOSED) {
-        this.ws.close();
+        console.log(`[Voice Gateway] 🔌 Closing previous WebSocket connection`);
+        this.ws.close(1000, 'Reconnecting with new callId/userId');
       }
       this.ws = null;
     }
@@ -164,10 +177,15 @@ export class VoiceGatewayService {
         }
         
         // Create new WebSocket connection
+        // CRITICAL: Log WebSocket creation to detect duplicates
+        console.log(`[Voice Gateway] 🔌 Creating new WebSocket connection (callId: ${this.callId}, userId: ${this.userId})`);
+        console.log(`[Voice Gateway] Previous WebSocket state: ${this.ws ? `exists, readyState=${this.ws.readyState}` : 'null'}`);
+        
         this.ws = new WebSocket(url);
         
         // Connection lifecycle logging
         const connectionStartTime = Date.now();
+        console.log(`[Voice Gateway] WebSocket object created, readyState: ${this.ws.readyState}`);
 
         this.ws.onopen = () => {
           const connectionTime = Date.now() - connectionStartTime;
@@ -234,6 +252,9 @@ export class VoiceGatewayService {
           resolve();
         };
 
+        // CRITICAL: Log when onmessage handler is attached
+        console.log(`[Voice Gateway] 📨 Attaching onmessage handler to WebSocket`);
+        
         this.ws.onmessage = async (event) => {
           if (typeof event.data === 'string') {
             // Text message (connection confirmation)
@@ -331,14 +352,19 @@ export class VoiceGatewayService {
           }
         };
 
+        // CRITICAL: Log when onclose handler is attached
+        console.log(`[Voice Gateway] 🔌 Attaching onclose handler to WebSocket`);
+        
         this.ws.onclose = (event: CloseEvent) => {
           const connectionDuration = Date.now() - connectionStartTime;
-          console.log(`[Voice Gateway] 🔌 Disconnected (code: ${event.code}, reason: ${event.reason || 'none'}, duration: ${connectionDuration}ms)`);
+          console.log(`[Voice Gateway] 🔌 WebSocket CLOSED (code: ${event.code}, reason: ${event.reason || 'none'}, duration: ${connectionDuration}ms)`);
           console.log(`[Voice Gateway] Close event details:`, {
             code: event.code,
             reason: event.reason,
             wasClean: event.wasClean,
-            readyState: this.ws?.readyState
+            readyState: this.ws?.readyState,
+            callId: this.callId,
+            userId: this.userId
           });
           
           this.connectedSubject.next(false);
@@ -353,6 +379,7 @@ export class VoiceGatewayService {
             this.ws.onmessage = null;
             this.ws.onerror = null;
             this.ws.onclose = null;
+            console.log(`[Voice Gateway] 🧹 Removed all WebSocket handlers`);
           }
           
           // Attempt reconnection if not a clean close and we should reconnect
@@ -464,7 +491,7 @@ export class VoiceGatewayService {
     }
 
     try {
-      // Create packet: seq (4 bytes) + timestamp (8 bytes) + payload (640 bytes)
+      // Create packet: seq (4 bytes) + timestamp (8 bytes) + senderId (24 bytes) + payload (640 bytes)
       const packet = new ArrayBuffer(PACKET_SIZE);
       const view = new DataView(packet);
       const timestamp = Date.now();
@@ -473,9 +500,14 @@ export class VoiceGatewayService {
       view.setUint32(0, seq, true); // seq (little-endian)
       view.setBigUint64(4, BigInt(timestamp), true); // timestamp (little-endian)
       
-      // Copy PCM payload
+      // Add senderId (24 bytes, UTF-8 encoded, padded/truncated)
+      const senderIdStr = this.userId.padEnd(SENDER_ID_SIZE, '\0').slice(0, SENDER_ID_SIZE);
+      const senderIdBytes = new TextEncoder().encode(senderIdStr);
+      new Uint8Array(packet, 12, SENDER_ID_SIZE).set(senderIdBytes.slice(0, SENDER_ID_SIZE));
+      
+      // Copy PCM payload (starts at offset 36: 12 + 24)
       const pcmBytes = new Uint8Array(pcm16Data.buffer);
-      new Uint8Array(packet, 12).set(pcmBytes);
+      new Uint8Array(packet, 36).set(pcmBytes);
 
       // Send packet as binary
       this.ws.send(packet);
