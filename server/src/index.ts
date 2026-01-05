@@ -133,12 +133,32 @@ setupVoiceChatSocket(io);
 // Initialize Voice Gateway WebSocket server
 initializeVoiceGateway(httpServer);
 
+// Add middleware to log all incoming requests (for debugging WebSocket upgrade attempts)
+app.use((req, res, next) => {
+  // Log WebSocket upgrade attempts and /voice-gateway requests
+  if (req.headers.upgrade === 'websocket' || req.path?.startsWith('/voice-gateway')) {
+    console.log(`[HTTP] ${req.method} ${req.path} - Upgrade: ${req.headers.upgrade}, Connection: ${req.headers.connection}`);
+    console.log(`[HTTP] Headers:`, JSON.stringify({
+      host: req.headers.host,
+      origin: req.headers.origin,
+      'x-forwarded-for': req.headers['x-forwarded-for'],
+      'x-forwarded-proto': req.headers['x-forwarded-proto'],
+      upgrade: req.headers.upgrade,
+      connection: req.headers.connection,
+    }, null, 2));
+  }
+  next();
+});
+
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Voice Gateway WebSocket available at ws://localhost:${PORT}/voice-gateway`);
-  console.log(`Allowed CORS origins: ${allowedOrigins.join(', ')}`);
-  console.log(`WebSocket enabled: true`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`✅ Voice Gateway WebSocket available at ws://localhost:${PORT}/voice-gateway`);
+  console.log(`✅ Socket.IO available at /socket.io`);
+  console.log(`✅ Allowed CORS origins: ${allowedOrigins.join(', ')}`);
+  console.log(`✅ WebSocket enabled: true`);
+  console.log(`✅ Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`✅ Process PID: ${process.pid}`);
+  console.log(`✅ Node version: ${process.version}`);
 });
 
 export default app;
