@@ -199,6 +199,9 @@ export class AudioCommunicationService {
         throw new Error('No audio track found in media stream');
       }
       
+      // DIAGNOSTIC: Log mic track state
+      console.log(`[Audio Communication] 🎤 Mic track initialized: enabled=${this.micTrack.enabled}, readyState=${this.micTrack.readyState}, muted=${this.micTrack.muted}, label=${this.micTrack.label}`);
+      
       // Use Web Audio API to capture PCM audio for real-time streaming
       this.audioSource = this.audioContext!.createMediaStreamSource(this.mediaStream);
       this.audioProcessor = this.audioContext!.createScriptProcessor(4096, 1, 1);
@@ -351,9 +354,9 @@ export class AudioCommunicationService {
         this.micTrack.enabled = !this.currentState.isMuted;
       }
       
-      // Log mute state
-      console.log(`[Audio Communication] Microphone ${this.currentState.isMuted ? 'muted' : 'unmuted'}`);
-      console.log(`[Audio Communication] micMuted=${this.currentState.isMuted}, audioCtx.state=${this.audioContext?.state || 'null'}, micTrack.enabled=${this.micTrack?.enabled ?? 'null'}`);
+      // DIAGNOSTIC: Log mute state with comprehensive details
+      console.log(`[Audio Communication] 🎤 Microphone ${this.currentState.isMuted ? 'MUTED' : 'UNMUTED'}`);
+      console.log(`[Audio Communication] 📊 Mute state: micMuted=${this.currentState.isMuted}, audioCtx.state=${this.audioContext?.state || 'null'}, micTrack.enabled=${this.micTrack?.enabled ?? 'null'}, micTrack.readyState=${this.micTrack?.readyState || 'null'}, micTrack.muted=${this.micTrack?.muted ?? 'null'}`);
       
       // On unmute, ALWAYS ensure audio context is running
       if (!this.currentState.isMuted && this.audioContext) {

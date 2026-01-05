@@ -13,6 +13,8 @@ const connections = new Map<WebSocket, {
   callId: string;
   connectedAt: number;
   packetsRelayed: number;
+  packetsReceived: number; // Track received audio frames
+  lastStatsLog: number; // Last time stats were logged (rate limiting)
 }>();
 
 /**
@@ -165,6 +167,7 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     }
 
     console.log(`[Voice Gateway] ✅ New connection: userId=${userId}, callId=${callId}`);
+    console.log(`[Voice Gateway] 📊 Connection details: origin=${req.headers.origin || 'none'}, path=${pathname}, fullURL=${req.url}`);
 
     // Store connection metadata
     const connId = `${userId}-${Date.now()}`;
@@ -174,6 +177,8 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       callId,
       connectedAt: Date.now(),
       packetsRelayed: 0,
+      packetsReceived: 0,
+      lastStatsLog: Date.now(),
     });
 
     // Join room
@@ -196,12 +201,26 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     // Handle incoming binary messages (audio packets)
     ws.on('message', (data: Buffer | ArrayBuffer | Buffer[], isBinary: boolean) => {
       const conn = connections.get(ws);
-      if (!conn) return;
+      if (!conn) {
+        console.warn('[Voice Gateway] ⚠️ Received message from unknown connection');
+        return;
+      }
 
       // Skip text messages (connection confirmations, etc.)
       if (!isBinary) {
+        // Log text messages for debugging (first few only)
+        if (conn.packetsReceived < 3) {
+          console.log(`[Voice Gateway] 📨 Received text message from ${conn.userId} in call ${conn.callId}:`, data.toString().substring(0, 100));
+        }
         return;
       }
+
+      // DIAGNOSTIC: Log first few audio packets
+      if (conn.packetsReceived < 3) {
+        console.log(`[Voice Gateway] 🎤 Received audio packet from ${conn.userId} in call ${conn.callId}, size: ${Buffer.isBuffer(data) ? data.length : 'unknown'}, roomSize: ${rooms.get(conn.callId)?.size || 0}`);
+      }
+      
+      conn.packetsReceived++;
 
       // Convert to Buffer if needed
       let buffer: Buffer;
@@ -246,12 +265,22 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       // Relay to all other connections in the same room
       // CRITICAL: Exclude sender (ws) to prevent loopback
       const room = rooms.get(conn.callId);
-      if (!room) return;
+      if (!room) {
+        console.warn(`[Voice Gateway] ⚠️ No room found for callId: ${conn.callId}`);
+        return;
+      }
 
+      const roomSize = room.size;
       let relayed = 0;
+      const recipients: string[] = [];
+      
       room.forEach((otherWs) => {
         // CRITICAL: Do NOT send to sender (prevents loopback)
         if (otherWs !== ws && otherWs.readyState === WebSocket.OPEN) {
+          const otherConn = connections.get(otherWs);
+          if (otherConn) {
+            recipients.push(otherConn.userId);
+          }
           otherWs.send(packetWithSender);
           relayed++;
         }
@@ -259,9 +288,18 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
 
       conn.packetsRelayed += relayed;
       
-      // Log occasionally (every 100 packets)
-      if (conn.packetsRelayed % 100 === 0) {
-        console.log(`[Voice Gateway] ${conn.userId} relayed ${conn.packetsRelayed} packets`);
+      // DIAGNOSTIC: Rate-limited stats logging (once per second per user)
+      const now = Date.now();
+      if (now - conn.lastStatsLog >= 1000) {
+        console.log(`[Voice Gateway] 📊 ${conn.userId} (call ${conn.callId}): received=${conn.packetsReceived}, relayed=${conn.packetsRelayed}, roomSize=${roomSize}, broadcastRecipients=${relayed}`);
+        conn.lastStatsLog = now;
+        // Reset counters for next second (optional, or keep cumulative)
+        // conn.packetsReceived = 0; // Keep cumulative for now
+      }
+      
+      // Log first few relay operations for debugging
+      if (conn.packetsRelayed <= 5) {
+        console.log(`[Voice Gateway] 🔄 Relayed packet from ${conn.userId} to ${relayed} recipient(s): [${recipients.join(', ')}]`);
       }
     });
 

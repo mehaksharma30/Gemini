@@ -77,8 +77,15 @@ export class VoiceGatewayService {
   
   // Stats for logging (once per second)
   private packetsRecvCount: number = 0;
+  private packetsSentCount: number = 0;
+  private packetsPlayedCount: number = 0;
   private lastLogTime: number = 0;
   private statsLogInterval: any = null;
+  
+  // Singleton connection guard
+  private activeCallId: string | null = null;
+  private activeUserId: string | null = null;
+  private onmessageHandlerAttached: boolean = false;
 
   // Connection state
   private connectedSubject = new BehaviorSubject<boolean>(false);
@@ -98,31 +105,36 @@ export class VoiceGatewayService {
    * @param userId - User ID
    */
   async connect(callId: string, userId: string): Promise<void> {
-    // CRITICAL: Ensure only ONE WebSocket connection per call
+    // CRITICAL: Singleton connection guard - ensure only ONE WebSocket per callId
     // If already connected to the same call, return early
-    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.callId === callId && this.userId === userId) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.activeCallId === callId && this.activeUserId === userId) {
       console.log(`[Voice Gateway] ⚠️ Already connected to call ${callId} as ${userId}, skipping duplicate connection`);
+      console.log(`[Voice Gateway] Active connection: callId=${this.activeCallId}, userId=${this.activeUserId}, readyState=${this.ws.readyState}`);
       return;
     }
     
-    // CRITICAL: Clean up any existing connection and handlers to prevent duplicates
-    if (this.ws) {
-      console.log(`[Voice Gateway] 🧹 Cleaning up existing connection before new connection`);
-      console.log(`[Voice Gateway] Previous connection: callId=${this.callId}, userId=${this.userId}, readyState=${this.ws.readyState}`);
+    // CRITICAL: If connecting to different call, close previous connection first
+    if (this.ws && (this.activeCallId !== callId || this.activeUserId !== userId)) {
+      console.log(`[Voice Gateway] 🔄 Switching calls: ${this.activeCallId}/${this.activeUserId} -> ${callId}/${userId}`);
+      console.log(`[Voice Gateway] 🧹 Cleaning up previous connection`);
+      console.log(`[Voice Gateway] Previous connection: callId=${this.activeCallId}, userId=${this.activeUserId}, readyState=${this.ws.readyState}`);
       
       // Remove all handlers to prevent duplicate handlers
       this.ws.onopen = null;
       this.ws.onmessage = null;
       this.ws.onerror = null;
       this.ws.onclose = null;
+      this.onmessageHandlerAttached = false;
       console.log(`[Voice Gateway] 🧹 Removed all handlers from previous WebSocket`);
       
       // Close existing connection cleanly
-      if (this.ws.readyState !== WebSocket.CLOSED) {
+      if (this.ws.readyState !== WebSocket.CLOSED && this.ws.readyState !== WebSocket.CLOSING) {
         console.log(`[Voice Gateway] 🔌 Closing previous WebSocket connection`);
-        this.ws.close(1000, 'Reconnecting with new callId/userId');
+        this.ws.close(1000, 'Switching to new call');
       }
       this.ws = null;
+      this.activeCallId = null;
+      this.activeUserId = null;
     }
 
     // Clean up intervals to prevent duplicates
@@ -143,8 +155,15 @@ export class VoiceGatewayService {
 
     this.callId = callId;
     this.userId = userId;
+    this.activeCallId = callId;
+    this.activeUserId = userId;
     this.shouldReconnect = true;
     this.reconnectAttempts = 0;
+    
+    // Reset packet counters
+    this.packetsSentCount = 0;
+    this.packetsRecvCount = 0;
+    this.packetsPlayedCount = 0;
 
     return this.attemptConnection();
   }
@@ -174,7 +193,8 @@ export class VoiceGatewayService {
           this.ws.onmessage = null;
           this.ws.onerror = null;
           this.ws.onclose = null;
-          if (this.ws.readyState !== WebSocket.CLOSED) {
+          this.onmessageHandlerAttached = false;
+          if (this.ws.readyState !== WebSocket.CLOSED && this.ws.readyState !== WebSocket.CLOSING) {
             this.ws.close();
           }
           this.ws = null;
@@ -182,8 +202,11 @@ export class VoiceGatewayService {
         
         // Create new WebSocket connection
         // CRITICAL: Log WebSocket creation to detect duplicates
-        console.log(`[Voice Gateway] 🔌 Creating new WebSocket connection (callId: ${this.callId}, userId: ${this.userId})`);
+        console.log(`[Voice Gateway] 🔌 Creating new WebSocket connection`);
+        console.log(`[Voice Gateway] URL: ${url}`);
+        console.log(`[Voice Gateway] callId: ${this.callId}, userId: ${this.userId}`);
         console.log(`[Voice Gateway] Previous WebSocket state: ${prevWsState}`);
+        console.log(`[Voice Gateway] Active call: ${this.activeCallId}, Active user: ${this.activeUserId}`);
         
         this.ws = new WebSocket(url);
         
@@ -256,8 +279,15 @@ export class VoiceGatewayService {
           resolve();
         };
 
+        // CRITICAL: Ensure onmessage handler is attached ONLY ONCE
+        if (this.onmessageHandlerAttached) {
+          console.error('[Voice Gateway] ❌ ERROR: onmessage handler already attached! This should not happen.');
+          return;
+        }
+        
         // CRITICAL: Log when onmessage handler is attached
-        console.log(`[Voice Gateway] 📨 Attaching onmessage handler to WebSocket`);
+        console.log(`[Voice Gateway] 📨 Attaching onmessage handler to WebSocket (callId: ${this.callId}, userId: ${this.userId})`);
+        this.onmessageHandlerAttached = true;
         
         this.ws.onmessage = async (event) => {
           if (typeof event.data === 'string') {
@@ -368,7 +398,9 @@ export class VoiceGatewayService {
             wasClean: event.wasClean,
             readyState: this.ws?.readyState,
             callId: this.callId,
-            userId: this.userId
+            userId: this.userId,
+            activeCallId: this.activeCallId,
+            activeUserId: this.activeUserId
           });
           
           this.connectedSubject.next(false);
@@ -383,7 +415,14 @@ export class VoiceGatewayService {
             this.ws.onmessage = null;
             this.ws.onerror = null;
             this.ws.onclose = null;
+            this.onmessageHandlerAttached = false;
             console.log(`[Voice Gateway] 🧹 Removed all WebSocket handlers`);
+          }
+          
+          // Clear active connection tracking
+          if (this.activeCallId === this.callId && this.activeUserId === this.userId) {
+            this.activeCallId = null;
+            this.activeUserId = null;
           }
           
           // Attempt reconnection if not a clean close and we should reconnect
@@ -515,6 +554,7 @@ export class VoiceGatewayService {
 
       // Send packet as binary
       this.ws.send(packet);
+      this.packetsSentCount++;
     } catch (error: any) {
       console.error('[Voice Gateway] Error sending audio packet:', error);
     }
@@ -579,10 +619,21 @@ export class VoiceGatewayService {
   /**
    * Get current stats for logging
    */
-  private getCurrentStats(): { packetsRecvPerSec: number; bufferDepth: number } {
+  private getCurrentStats(): { packetsSentPerSec: number; packetsRecvPerSec: number; packetsPlayedPerSec: number; bufferDepth: number } {
+    const packetsSentPerSec = this.packetsSentCount;
+    const packetsRecvPerSec = this.packetsRecvCount;
+    const packetsPlayedPerSec = this.packetsPlayedCount;
+    
+    // Reset counters for next second
+    this.packetsSentCount = 0;
+    this.packetsRecvCount = 0;
+    this.packetsPlayedCount = 0;
+    
     return {
-      packetsRecvPerSec: this.packetsRecvCount,
-      bufferDepth: this.jitterBuffer.size
+      packetsSentPerSec,
+      packetsRecvPerSec,
+      packetsPlayedPerSec,
+      bufferDepth: this.jitterBuffer.size,
     };
   }
   
@@ -846,6 +897,7 @@ export class VoiceGatewayService {
 
       // Track scheduled source for cleanup
       this.scheduledSources.add(source);
+      this.packetsPlayedCount++; // Track played packets
 
       // Clean up when source ends
       source.onended = () => {
@@ -918,8 +970,10 @@ export class VoiceGatewayService {
    */
   private logStats(): void {
     const now = Date.now();
-    const packetsRecvPerSec = this.packetsRecvCount;
-    this.packetsRecvCount = 0; // Reset counter
+    if (now - this.lastLogTime < 1000) {
+      return; // Rate limit: log once per second
+    }
+    this.lastLogTime = now;
     
     const audioCtxState = this.audioContext ? this.audioContext.state : 'null';
     
@@ -930,8 +984,9 @@ export class VoiceGatewayService {
       scheduledAheadMs = Math.round(aheadSeconds * 1000);
     }
     
-    // Consolidated stats log
-    console.log(`[Voice Gateway] Stats: packetsRecv/sec=${packetsRecvPerSec}, bufferDepth=${this.jitterBuffer.size}, scheduledAheadMs=${scheduledAheadMs}, playing=${this.isPlaying}, schedulingPaused=${this.isSchedulingPaused}, audioCtx.state=${audioCtxState}`);
+    // DIAGNOSTIC: Comprehensive stats logging
+    const stats = this.getCurrentStats();
+    console.log(`[Voice Gateway] 📊 Stats: sent/sec=${stats.packetsSentPerSec}, recv/sec=${stats.packetsRecvPerSec}, played/sec=${stats.packetsPlayedPerSec}, bufferDepth=${this.jitterBuffer.size}, scheduledAheadMs=${scheduledAheadMs}, playing=${this.isPlaying}, schedulingPaused=${this.isSchedulingPaused}, audioCtx.state=${audioCtxState}, micMuted=${this.isMicMuted}, speakerMuted=${this.isSpeakerMuted}`);
   }
 
   /**
