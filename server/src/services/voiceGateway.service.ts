@@ -384,29 +384,44 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
           return c ? `${c.userId}(${c.callId}, readyState=${ws.readyState})` : 'unknown';
         }).filter(Boolean);
         console.warn(`[Voice Gateway] ⚠️ Room ${conn.callId} participants: [${participants.join(', ')}]`);
-        console.warn(`[Voice Gateway] ⚠️ ALL rooms in server:`, Array.from(rooms.entries()).map(([id, roomSet]) => 
-          `${id}(${roomSet.size} participants)`
-        ).join(', '));
+        console.warn(`[Voice Gateway] ⚠️ ALL rooms in server:`, Array.from(rooms.entries()).map(([id, roomSet]) => {
+          const roomParticipants = Array.from(roomSet).map(rws => {
+            const rc = connections.get(rws);
+            return rc ? `${rc.userId}(${rc.callId})` : 'unknown';
+          }).filter(Boolean);
+          return `${id}(${roomSet.size} participants: [${roomParticipants.join(', ')}])`;
+        }).join(', '));
         
-        // CRITICAL FIX: Try to find receiver in other rooms (might be callId mismatch)
+        // CRITICAL FIX: Try to find receiver in ALL other rooms (aggressive search)
         let foundReceiver = false;
         for (const [otherCallId, otherRoom] of rooms.entries()) {
           if (otherCallId !== conn.callId && otherRoom.size > 0) {
             // Check if callIds are similar (might be same call with different format)
             const callIdSimilar = otherCallId.includes(conn.callId) || conn.callId.includes(otherCallId);
-            if (callIdSimilar || otherRoom.size === 1) {
-              console.warn(`[Voice Gateway] 🔍 Found potential receiver room: ${otherCallId} with ${otherRoom.size} participant(s)`);
-              // Try to merge rooms or find the other participant
+            // Also check if rooms have same participants (userId-based matching)
+            const hasOtherUser = Array.from(otherRoom).some(otherWs => {
+              const otherConn = connections.get(otherWs);
+              return otherConn && otherConn.userId !== conn.userId;
+            });
+            
+            if (callIdSimilar || hasOtherUser) {
+              console.warn(`[Voice Gateway] 🔍 Found potential receiver room: ${otherCallId} with ${otherRoom.size} participant(s) (similar=${callIdSimilar}, hasOtherUser=${hasOtherUser})`);
+              // Try to relay to all participants in this room
               otherRoom.forEach(otherWs => {
                 const otherConn = connections.get(otherWs);
-                if (otherConn && otherConn.userId !== conn.userId && otherWs.readyState === WebSocket.OPEN) {
-                  console.warn(`[Voice Gateway] 🔧 Attempting to relay to ${otherConn.userId} in room ${otherCallId} (callId mismatch fix)`);
-                  try {
-                    otherWs.send(packetWithSender);
-                    foundReceiver = true;
-                    console.log(`[Voice Gateway] ✅ Successfully relayed to ${otherConn.userId} in different room (callId fix)`);
-                  } catch (error: any) {
-                    console.error(`[Voice Gateway] ❌ Failed to relay to ${otherConn.userId}:`, error.message);
+                if (otherConn && otherConn.userId !== conn.userId) {
+                  const wsState = otherWs.readyState;
+                  console.warn(`[Voice Gateway] 🔧 Attempting to relay to ${otherConn.userId} in room ${otherCallId} (readyState=${wsState}, callId mismatch fix)`);
+                  if (wsState === WebSocket.OPEN) {
+                    try {
+                      otherWs.send(packetWithSender);
+                      foundReceiver = true;
+                      console.log(`[Voice Gateway] ✅ Successfully relayed to ${otherConn.userId} in different room (callId fix)`);
+                    } catch (error: any) {
+                      console.error(`[Voice Gateway] ❌ Failed to relay to ${otherConn.userId}:`, error.message);
+                    }
+                  } else {
+                    console.warn(`[Voice Gateway] ⚠️ Cannot relay to ${otherConn.userId}: WebSocket readyState=${wsState} (not OPEN)`);
                   }
                 }
               });
@@ -414,7 +429,29 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
           }
         }
         
+        // CRITICAL: If still no receiver, try to find ANY other user in ANY room (last resort)
         if (!foundReceiver) {
+          console.warn(`[Voice Gateway] 🔍 Last resort: Searching ALL rooms for ANY other user...`);
+          for (const [anyCallId, anyRoom] of rooms.entries()) {
+            anyRoom.forEach(anyWs => {
+              const anyConn = connections.get(anyWs);
+              if (anyConn && anyConn.userId !== conn.userId && anyWs.readyState === WebSocket.OPEN) {
+                console.warn(`[Voice Gateway] 🔧 Last resort relay: ${conn.userId} -> ${anyConn.userId} (room: ${anyCallId})`);
+                try {
+                  anyWs.send(packetWithSender);
+                  foundReceiver = true;
+                  console.log(`[Voice Gateway] ✅ Last resort relay successful: ${conn.userId} -> ${anyConn.userId}`);
+                } catch (error: any) {
+                  console.error(`[Voice Gateway] ❌ Last resort relay failed:`, error.message);
+                }
+              }
+            });
+            if (foundReceiver) break;
+          }
+        }
+        
+        if (!foundReceiver) {
+          console.error(`[Voice Gateway] ❌ CRITICAL: No receiver found anywhere! Packet from ${conn.userId} will be dropped.`);
           return; // No one to relay to
         }
         // If we found a receiver, continue to normal relay logic as well
@@ -606,11 +643,11 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'connected',
-            callId,
+            callId: normalizedCallId, // CRITICAL FIX: Use normalized callId
             userId,
             timestamp: Date.now(),
           }));
-          console.log(`[Voice Gateway] Sent connection confirmation to ${userId}`);
+          console.log(`[Voice Gateway] Sent connection confirmation to ${userId} for call ${normalizedCallId}`);
         }
       } catch (error: any) {
         console.error(`[Voice Gateway] Error sending connection confirmation:`, error.message);
