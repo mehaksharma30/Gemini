@@ -275,6 +275,13 @@ export class VoiceGatewayService {
             return;
           }
           
+          // INSTRUMENTATION: Log event.data type (define before try block for scope)
+          const dataType = event.data instanceof ArrayBuffer ? 'ArrayBuffer' :
+                          event.data instanceof Blob ? 'Blob' :
+                          typeof event.data === 'string' ? 'string' :
+                          typeof event.data;
+          const dataConstructor = event.data?.constructor?.name || 'unknown';
+          
           if (typeof event.data === 'string') {
             // Text message (connection confirmation)
             try {
@@ -294,8 +301,18 @@ export class VoiceGatewayService {
           try {
             if (event.data instanceof ArrayBuffer) {
               arrayBuffer = event.data;
+              // INSTRUMENTATION: Log ArrayBuffer details
+              if (this.packetsRecvCount < 5) {
+                console.log(`[Voice Gateway] RX: event.data type=${dataType} (${dataConstructor}), byteLength=${arrayBuffer.byteLength}`);
+              }
             } else if (event.data instanceof Blob) {
+              // INSTRUMENTATION: Log Blob size before conversion
+              const blobSize = event.data.size;
               arrayBuffer = await event.data.arrayBuffer();
+              // INSTRUMENTATION: Log Blob details and converted size
+              if (this.packetsRecvCount < 5) {
+                console.log(`[Voice Gateway] RX: event.data type=${dataType} (${dataConstructor}), Blob.size=${blobSize}, converted ArrayBuffer.byteLength=${arrayBuffer.byteLength}`);
+              }
             } else if (event.data && typeof event.data === 'object') {
               // Node.js ws library sends Buffer or Uint8Array
               const data = event.data as any;
@@ -340,10 +357,25 @@ export class VoiceGatewayService {
             }
             
             if (arrayBuffer) {
-              // Log first few packets for debugging
-              if (this.packetsRecvCount < 3) {
-                console.log(`[Voice Gateway] Received binary message, size: ${arrayBuffer.byteLength} bytes, type: ${event.data?.constructor?.name}`);
+              // INSTRUMENTATION: Check if binary payload matches expected size and increment counter
+              const isOldFormat = arrayBuffer.byteLength === PACKET_SIZE_OLD; // 652 bytes
+              const isNewFormat = arrayBuffer.byteLength === PACKET_SIZE; // 676 bytes
+              
+              if (isOldFormat || isNewFormat) {
+                // Increment counter when payload matches expected size
+                this.packetsRecvCount++;
+                
+                // INSTRUMENTATION: Log first 5 packet lengths
+                if (this.packetsRecvCount <= 5) {
+                  console.log(`[Voice Gateway] RX: packet #${this.packetsRecvCount}, byteLength=${arrayBuffer.byteLength}, format=${isNewFormat ? 'NEW(676)' : 'OLD(652)'}, event.data type=${dataType}`);
+                }
+              } else {
+                // Log unexpected size
+                if (this.packetsRecvCount < 5) {
+                  console.warn(`[Voice Gateway] RX: Unexpected packet size: ${arrayBuffer.byteLength} bytes (expected ${PACKET_SIZE_OLD} or ${PACKET_SIZE}), event.data type=${dataType}`);
+                }
               }
+              
               this.handleAudioPacket(arrayBuffer);
             } else {
               console.warn('[Voice Gateway] Failed to convert message to ArrayBuffer');

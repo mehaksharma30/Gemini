@@ -51,6 +51,7 @@ server.on('connection', (ws, req) => {
     return;
   }
 
+  // INSTRUMENTATION: Log callId/userId on connect
   console.log(`[Voice Gateway] ✅ New connection: userId=${userId}, callId=${callId}`);
 
   // Store connection metadata
@@ -61,6 +62,7 @@ server.on('connection', (ws, req) => {
     callId,
     connectedAt: Date.now(),
     packetsRelayed: 0,
+    packetsReceivedFromClient: 0, // INSTRUMENTATION: Track packets received from this client
   });
 
   // Join room
@@ -71,6 +73,10 @@ server.on('connection', (ws, req) => {
 
   const roomSize = rooms.get(callId).size;
   console.log(`[Voice Gateway] User ${userId} joined call ${callId} (${roomSize} participant${roomSize !== 1 ? 's' : ''})`);
+  
+  // INSTRUMENTATION: Log room participants
+  const participants = Array.from(rooms.get(callId)).map(ws => connections.get(ws)?.userId).filter(Boolean);
+  console.log(`[Voice Gateway] Room ${callId} participants: [${participants.join(', ')}]`);
 
   // Initialize isAlive flag
   ws.isAlive = true;
@@ -88,6 +94,14 @@ server.on('connection', (ws, req) => {
     // Skip text messages (connection confirmations, etc.)
     if (!isBinary) {
       return;
+    }
+
+    // INSTRUMENTATION: Increment per-user recv count (packets received FROM client)
+    conn.packetsReceivedFromClient++;
+    
+    // INSTRUMENTATION: Log every 100 received packets per user
+    if (conn.packetsReceivedFromClient % 100 === 0) {
+      console.log(`[Voice Gateway] ${conn.userId} received ${conn.packetsReceivedFromClient} packets from client (callId=${conn.callId})`);
     }
 
     // Convert to Buffer if needed
@@ -112,14 +126,29 @@ server.on('connection', (ws, req) => {
     }
 
     // Validate packet size: header (12 bytes) + payload (640 bytes) = 652 bytes
-    if (!buffer || buffer.length !== 652) {
-      console.warn(`[Voice Gateway] Invalid packet size: ${buffer?.length || 'undefined'} bytes (expected 652)`);
+    // Also support new format: 676 bytes (with senderId)
+    const isValidSize = buffer && (buffer.length === 652 || buffer.length === 676);
+    if (!isValidSize) {
+      console.warn(`[Voice Gateway] Invalid packet size: ${buffer?.length || 'undefined'} bytes (expected 652 or 676) from ${conn.userId}`);
       return;
     }
 
     // Relay to all other connections in the same room
-    const room = rooms.get(callId);
-    if (!room) return;
+    const room = rooms.get(conn.callId);
+    if (!room) {
+      console.warn(`[Voice Gateway] Room ${conn.callId} not found for relay`);
+      return;
+    }
+
+    const roomSize = room.size;
+    
+    // INSTRUMENTATION: Log if room size < 2 (means no receiver)
+    if (roomSize < 2) {
+      if (conn.packetsReceivedFromClient % 50 === 0) {
+        console.warn(`[Voice Gateway] ⚠️ Room ${conn.callId} has only ${roomSize} participant(s) - no receiver! User ${conn.userId} is sending but no one to receive.`);
+      }
+      return; // No one to relay to
+    }
 
     let relayed = 0;
     room.forEach((otherWs) => {
@@ -131,9 +160,9 @@ server.on('connection', (ws, req) => {
 
     conn.packetsRelayed += relayed;
     
-    // Log occasionally (every 100 packets)
+    // INSTRUMENTATION: Log relay stats (every 100 relayed packets)
     if (conn.packetsRelayed % 100 === 0) {
-      console.log(`[Voice Gateway] ${userId} relayed ${conn.packetsRelayed} packets`);
+      console.log(`[Voice Gateway] ${conn.userId} relayed ${conn.packetsRelayed} packets to ${relayed} recipient(s) in room ${conn.callId} (roomSize=${roomSize})`);
     }
   });
 
