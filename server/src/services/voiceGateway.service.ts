@@ -312,18 +312,23 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       const recipients: string[] = [];
       const skippedRecipients: string[] = [];
       
-      // INSTRUMENTATION: Log room details before relay (first 10 packets)
-      if (conn.packetsRelayed < 10) {
-        const allParticipants = Array.from(room).map(ws => {
-          const c = connections.get(ws);
-          return c ? `${c.userId}(readyState=${ws.readyState})` : 'unknown';
+      // INSTRUMENTATION: Log room details before relay (ALWAYS log first 20 packets to diagnose)
+      if (conn.packetsRelayed < 20) {
+        const allParticipants = Array.from(room).map(roomWs => {
+          const c = connections.get(roomWs);
+          const isSender = roomWs === ws;
+          return c ? `${c.userId}(readyState=${roomWs.readyState}, callId=${c.callId}${isSender ? ', SENDER' : ''})` : 'unknown';
         }).filter(Boolean);
-        console.log(`[Voice Gateway] 🔄 Relay attempt: sender=${conn.userId}, roomSize=${roomSize}, participants: [${allParticipants.join(', ')}]`);
+        console.log(`[Voice Gateway] 🔄 Relay attempt #${conn.packetsRelayed + 1}: sender=${conn.userId}, roomSize=${roomSize}, participants: [${allParticipants.join(', ')}]`);
       }
       
       room.forEach((otherWs) => {
         // CRITICAL: Do NOT send to sender (prevents loopback)
         if (otherWs === ws) {
+          // INSTRUMENTATION: Log when skipping sender (first few times)
+          if (conn.packetsRelayed < 5) {
+            console.log(`[Voice Gateway] ⏭️ Skipping sender ${conn.userId} (self)`);
+          }
           return; // Skip sender
         }
         
@@ -334,26 +339,36 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
           return;
         }
         
-        // INSTRUMENTATION: Log WebSocket state before sending
-        if (otherWs.readyState !== WebSocket.OPEN) {
-          skippedRecipients.push(`${otherConn.userId}(readyState=${otherWs.readyState})`);
-          if (conn.packetsRelayed < 10) {
-            console.warn(`[Voice Gateway] ⚠️ Skipping relay to ${otherConn.userId}: WebSocket readyState=${otherWs.readyState} (not OPEN=1)`);
-          }
+        // CRITICAL: Check WebSocket state - use numeric constant (1 = OPEN) for reliability
+        const WS_OPEN = 1; // WebSocket.OPEN constant value
+        const wsReadyState = otherWs.readyState;
+        
+        // INSTRUMENTATION: Log WebSocket state before sending (always log first 10, then every 100)
+        if (conn.packetsRelayed < 10 || conn.packetsRelayed % 100 === 0) {
+          console.log(`[Voice Gateway] 🔍 Checking recipient ${otherConn.userId}: readyState=${wsReadyState} (OPEN=1, CONNECTING=0, CLOSING=2, CLOSED=3)`);
+        }
+        
+        if (wsReadyState !== WS_OPEN) {
+          skippedRecipients.push(`${otherConn.userId}(readyState=${wsReadyState})`);
+          // CRITICAL: Always log skipped recipients (not just first 10) to diagnose
+          console.warn(`[Voice Gateway] ⚠️ Skipping relay to ${otherConn.userId}: WebSocket readyState=${wsReadyState} (not OPEN=1). CallId: ${otherConn.callId}`);
           return;
         }
         
         try {
+          // CRITICAL: Send packet - this is where the actual relay happens
           otherWs.send(packetWithSender);
           recipients.push(otherConn.userId);
           relayed++;
           
-          // INSTRUMENTATION: Log first successful relay
+          // INSTRUMENTATION: Log first successful relay and every 100th
           if (conn.packetsRelayed === 0 && relayed === 1) {
-            console.log(`[Voice Gateway] ✅ First successful relay: ${conn.userId} -> ${otherConn.userId}, packetSize=${packetWithSender.length} bytes`);
+            console.log(`[Voice Gateway] ✅ First successful relay: ${conn.userId} -> ${otherConn.userId}, packetSize=${packetWithSender.length} bytes, callId=${conn.callId}`);
+          } else if (relayed > 0 && (conn.packetsRelayed + relayed) % 100 === 0) {
+            console.log(`[Voice Gateway] ✅ Relayed ${conn.packetsRelayed + relayed} packets: ${conn.userId} -> ${otherConn.userId}`);
           }
         } catch (error: any) {
-          console.error(`[Voice Gateway] ❌ Error sending packet to ${otherConn.userId}:`, error.message);
+          console.error(`[Voice Gateway] ❌ Error sending packet to ${otherConn.userId}:`, error.message, `CallId: ${otherConn.callId}`);
           skippedRecipients.push(`${otherConn.userId}(error: ${error.message})`);
         }
       });

@@ -265,8 +265,15 @@ export class VoiceGatewayService {
           this.onmessageHandlerAttached = false;
         }
         
-        console.log(`[Voice Gateway] 📨 Attaching onmessage handler to WebSocket`);
+        console.log(`[Voice Gateway] 📨 Attaching onmessage handler to WebSocket (readyState=${this.ws.readyState})`);
         this.onmessageHandlerAttached = true;
+        
+        // CRITICAL: Verify handler is attached
+        if (!this.ws.onmessage) {
+          console.error('[Voice Gateway] ❌ ERROR: onmessage handler is null after assignment!');
+        } else {
+          console.log('[Voice Gateway] ✅ onmessage handler successfully attached');
+        }
         
         this.ws.onmessage = async (event) => {
           // CRITICAL: Log EVERY message received to diagnose why recv/sec=0
@@ -275,10 +282,16 @@ export class VoiceGatewayService {
           const currentWsState = this.currentWs?.readyState ?? 'null';
           const wsMatch = this.ws === this.currentWs;
           
-          // INSTRUMENTATION: Log first 10 messages with full details
-          if (this.packetsRecvCount < 10) {
-            console.log(`[Voice Gateway] 📨 onmessage FIRED: packetsRecvCount=${this.packetsRecvCount}, ws.readyState=${wsState}, currentWs.readyState=${currentWsState}, wsMatch=${wsMatch}`);
-          }
+          // INSTRUMENTATION: Determine event.data type BEFORE logging
+          const dataConstructor = event.data?.constructor?.name || 'unknown';
+          const dataType = event.data instanceof ArrayBuffer ? 'ArrayBuffer' :
+                          event.data instanceof Blob ? 'Blob' :
+                          typeof event.data === 'string' ? 'string' :
+                          typeof event.data;
+          
+          // CRITICAL: Log EVERY message (not just first 10) to diagnose why recv/sec=0
+          // If we see this log, messages ARE arriving at client
+          console.log(`[Voice Gateway] 📨 onmessage FIRED: packetsRecvCount=${this.packetsRecvCount}, ws.readyState=${wsState}, currentWs.readyState=${currentWsState}, wsMatch=${wsMatch}, event.data type=${dataType}`);
           
           // CRITICAL: Verify this is still the current WS (prevent stale handler)
           // BUT: Only block if ws is null and currentWs exists (definite stale handler)
@@ -292,13 +305,6 @@ export class VoiceGatewayService {
             console.warn(`[Voice Gateway] ⚠️ WebSocket mismatch detected: ws.readyState=${this.ws.readyState}, currentWs.readyState=${this.currentWs.readyState}`);
             // Still process the message - don't block on mismatch
           }
-          
-          // INSTRUMENTATION: Log event.data constructor name
-          const dataConstructor = event.data?.constructor?.name || 'unknown';
-          const dataType = event.data instanceof ArrayBuffer ? 'ArrayBuffer' :
-                          event.data instanceof Blob ? 'Blob' :
-                          typeof event.data === 'string' ? 'string' :
-                          typeof event.data;
           
           if (typeof event.data === 'string') {
             // Text message (connection confirmation) - log and ignore
