@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 import { BehaviorSubject, Observable } from 'rxjs';
+import { environment } from '../../../environments/environment';
 
 // Voice Gateway Constants
 const SAMPLE_RATE = 16000;
@@ -13,8 +14,8 @@ const MIN_BUFFER_PACKETS = 25; // ~500ms buffer before starting playback
 const MAX_BUFFER_PACKETS = 50; // ~1000ms max buffer
 const LOW_BUFFER_THRESHOLD = 12; // Pause scheduling if buffer drops below this (but don't reset state)
 
-// Voice Gateway WebSocket URL (local development)
-const GATEWAY_URL = 'ws://localhost:8080';
+// Voice Gateway WebSocket URL (from environment)
+const GATEWAY_URL = environment.voiceGatewayUrl;
 
 // Downsample audio to 16kHz using linear interpolation
 function downsampleTo16k(inputFloat32: Float32Array, inputRate: number): Float32Array {

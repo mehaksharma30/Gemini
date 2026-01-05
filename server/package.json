@@ -23,6 +23,7 @@
     "@azure/web-pubsub": "^1.2.0",
     "@azure/web-pubsub-express": "^1.0.6",
     "@types/multer": "^2.0.0",
+    "@types/ws": "^8.18.1",
     "axios": "^1.13.2",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
@@ -35,7 +36,8 @@
     "multer": "^2.0.2",
     "nodemailer": "^7.0.12",
     "openai": "^6.15.0",
-    "socket.io": "^4.7.2"
+    "socket.io": "^4.7.2",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",

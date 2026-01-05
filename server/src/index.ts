@@ -22,6 +22,7 @@ import webPubSubRoutes from './routes/webPubSub.routes';
 import { setupDMSocket } from './socket/dmSocket';
 import { setupVoiceChatSocket } from './socket/voiceChatSocket';
 import { initializeAzureSpeech } from './services/azureSpeech.service';
+import { initializeVoiceGateway } from './services/voiceGateway.service';
 
 dotenv.config();
 
@@ -117,8 +118,12 @@ app.get('/api/health', (req, res) => {
 setupDMSocket(io);
 setupVoiceChatSocket(io);
 
+// Initialize Voice Gateway WebSocket server
+initializeVoiceGateway(httpServer);
+
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Voice Gateway WebSocket available at ws://localhost:${PORT}/voice-gateway`);
 });
 
 export default app;
