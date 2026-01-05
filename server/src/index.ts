@@ -151,8 +151,10 @@ app.use((req, res, next) => {
 });
 
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Server running on port ${PORT}`);
-  console.log(`✅ Voice Gateway WebSocket available at ws://localhost:${PORT}/voice-gateway`);
+  console.log(`✅ Server running on port ${PORT} (from process.env.PORT: ${process.env.PORT || 'not set, using default 3000'})`);
+  console.log(`✅ Voice Gateway WebSocket available at:`);
+  console.log(`   - ws://localhost:${PORT}/voice-gateway (with ?callId=...&userId=...)`);
+  console.log(`   - ws://localhost:${PORT}/vo_<session> (with ?userId=...)`);
   console.log(`✅ Socket.IO available at /socket.io`);
   console.log(`✅ Allowed CORS origins: ${allowedOrigins.join(', ')}`);
   console.log(`✅ WebSocket enabled: true`);

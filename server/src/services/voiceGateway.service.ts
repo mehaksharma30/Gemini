@@ -20,9 +20,10 @@ const connections = new Map<WebSocket, {
  * Attaches to the existing HTTP server
  */
 export function initializeVoiceGateway(httpServer: HttpServer): void {
+  // Create WebSocket server without path restriction (we'll handle paths in verifyClient)
   const wss = new WebSocketServer({ 
     server: httpServer,
-    path: '/voice-gateway',
+    // Don't set path here - we'll handle multiple paths in verifyClient
     perMessageDeflate: false, // Disable compression for lower latency
     clientTracking: true,
     verifyClient: (info: { origin?: string; req: any; secure: boolean }) => {
@@ -58,9 +59,13 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       console.log(`[Voice Gateway] Connection header: ${info.req.headers.connection}`);
       console.log(`[Voice Gateway] User-Agent: ${userAgent.substring(0, 100)}`);
       
-      // Check path
-      if (pathname !== '/voice-gateway' && pathname !== '/voice-gateway/') {
+      // Accept both /voice-gateway and /vo_* paths (for backward compatibility and different client implementations)
+      const isVoiceGatewayPath = pathname === '/voice-gateway' || pathname === '/voice-gateway/';
+      const isVoSessionPath = pathname.startsWith('/vo_');
+      
+      if (!isVoiceGatewayPath && !isVoSessionPath) {
         console.warn(`[Voice Gateway] ❌ Rejected connection to invalid path: ${pathname}`);
+        console.warn(`[Voice Gateway] Expected paths: /voice-gateway or /vo_<session>`);
         return false;
       }
       
@@ -101,7 +106,6 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     console.log(`[Voice Gateway] ✅ WebSocket connection established at ${new Date().toISOString()}`);
     console.log(`[Voice Gateway] Connection path: ${pathname}`);
     console.log(`[Voice Gateway] Full request URL: ${req.url}`);
-    console.log(`[Voice Gateway] Request headers:`, JSON.stringify(req.headers, null, 2));
     
     // Parse query parameters from URL
     let callId: string | null = null;
@@ -112,16 +116,41 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       const host = req.headers.host || 'localhost';
       const protocol = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
       const url = new URL(req.url || '', `${protocol}://${host}`);
-      callId = url.searchParams.get('callId');
-      userId = url.searchParams.get('userId');
       
-      console.log(`[Voice Gateway] Parsed query params - callId: ${callId}, userId: ${userId}`);
+      // Support both query params and path-based session IDs
+      // For /vo_<session> paths, extract session from path
+      if (pathname.startsWith('/vo_')) {
+        const sessionMatch = pathname.match(/^\/vo_(.+)$/);
+        if (sessionMatch) {
+          callId = sessionMatch[1]; // Use session ID from path as callId
+        }
+        userId = url.searchParams.get('userId');
+      } else {
+        // For /voice-gateway, use query params
+        callId = url.searchParams.get('callId');
+        userId = url.searchParams.get('userId');
+      }
+      
+      console.log(`[Voice Gateway] Parsed params - callId: ${callId}, userId: ${userId}`);
     } catch (error) {
       // Fallback: manual parsing
-      const match = req.url?.match(/[?&]callId=([^&]+)/);
+      // Try to extract from /vo_<session> path
+      if (pathname.startsWith('/vo_')) {
+        const sessionMatch = pathname.match(/^\/vo_(.+)$/);
+        if (sessionMatch) {
+          callId = sessionMatch[1];
+        }
+      }
+      
+      // Extract userId from query string
       const match2 = req.url?.match(/[?&]userId=([^&]+)/);
-      callId = match ? decodeURIComponent(match[1]) : null;
       userId = match2 ? decodeURIComponent(match2[1]) : null;
+      
+      // If not found in path, try callId from query
+      if (!callId) {
+        const match = req.url?.match(/[?&]callId=([^&]+)/);
+        callId = match ? decodeURIComponent(match[1]) : null;
+      }
     }
 
     if (!callId || !userId) {
