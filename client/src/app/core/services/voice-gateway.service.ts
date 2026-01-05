@@ -199,12 +199,16 @@ export class VoiceGatewayService {
         this.ws = new WebSocket(url);
         this.currentWs = this.ws; // Track current WS
         
+        // INSTRUMENTATION: Log WebSocket readyState at creation
+        console.log(`[Voice Gateway] WebSocket created, readyState=${this.ws.readyState} (CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3)`);
+        
         const connectionStartTime = Date.now();
 
         // CRITICAL: Use direct assignment (ws.onopen = handler), NOT addEventListener
         this.ws.onopen = () => {
           const connectionTime = Date.now() - connectionStartTime;
-          console.log(`[Voice Gateway] ✅ Connected successfully (${connectionTime}ms)`);
+          // INSTRUMENTATION: Log WebSocket readyState at connect
+          console.log(`[Voice Gateway] ✅ Connected successfully (${connectionTime}ms), readyState=${this.ws?.readyState} (OPEN=1)`);
           
           // Reset reconnection state
           this.reconnectAttempts = 0;
@@ -475,17 +479,32 @@ export class VoiceGatewayService {
    * @param pcm16Data - Int16Array of 320 samples (640 bytes)
    */
   sendAudioPacket(pcm16Data: Int16Array): void {
-    // Mic mute: do not send packets if muted (but don't stop tracks/engine)
+    // INSTRUMENTATION: Log reason for early return
     if (this.isMicMuted) {
+      // Only log first few times to avoid spam
+      if (this.packetsSentCount === 0 || (this.packetsSentCount < 5 && this.packetsSentCount % 10 === 0)) {
+        console.log(`[Voice Gateway] sendAudioPacket() early return: micMuted=true`);
+      }
       return;
     }
     
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.ws) {
+      if (this.packetsSentCount === 0 || (this.packetsSentCount < 5 && this.packetsSentCount % 10 === 0)) {
+        console.log(`[Voice Gateway] sendAudioPacket() early return: ws is null`);
+      }
+      return;
+    }
+    
+    // INSTRUMENTATION: Log WebSocket readyState before send
+    if (this.ws.readyState !== WebSocket.OPEN) {
+      if (this.packetsSentCount === 0 || (this.packetsSentCount < 5 && this.packetsSentCount % 10 === 0)) {
+        console.log(`[Voice Gateway] sendAudioPacket() early return: ws.readyState=${this.ws.readyState} (not OPEN=1)`);
+      }
       return;
     }
 
     if (pcm16Data.length !== SAMPLES_PER_FRAME) {
-      console.warn(`[Voice Gateway] Invalid packet size: ${pcm16Data.length} (expected ${SAMPLES_PER_FRAME})`);
+      console.warn(`[Voice Gateway] sendAudioPacket() early return: Invalid packet size: ${pcm16Data.length} (expected ${SAMPLES_PER_FRAME})`);
       return;
     }
 
@@ -511,6 +530,11 @@ export class VoiceGatewayService {
       // Send packet as binary
       this.ws.send(packet);
       this.packetsSentCount++;
+      
+      // INSTRUMENTATION: Log first few successful sends
+      if (this.packetsSentCount <= 3) {
+        console.log(`[Voice Gateway] ✅ sendAudioPacket() SUCCESS: seq=${seq}, ws.readyState=${this.ws.readyState}, packetsSentCount=${this.packetsSentCount}`);
+      }
     } catch (error: any) {
       console.error('[Voice Gateway] Error sending audio packet:', error);
     }

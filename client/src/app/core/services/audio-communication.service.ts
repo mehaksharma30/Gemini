@@ -80,6 +80,10 @@ export class AudioCommunicationService {
   // Diagnostic logging interval
   private micStatsLogInterval: any = null;
   private lastPacketsSentCount: number = 0;
+  
+  // Capture callback instrumentation
+  private captureFrameCount: number = 0; // Track frames processed for heartbeat
+  private monitorGain: GainNode | null = null; // Store monitorGain for cleanup
 
   constructor() {
     // Subscribe to Voice Gateway connection status
@@ -207,12 +211,17 @@ export class AudioCommunicationService {
         this.audioSource.disconnect();
         this.audioSource = null;
       }
+      if (this.monitorGain) {
+        this.monitorGain.disconnect();
+        this.monitorGain = null;
+      }
       if (this.mediaStream) {
         this.mediaStream.getTracks().forEach(track => track.stop());
         this.mediaStream = null;
       }
       this.micTrack = null;
       this.captureStarted = false;
+      this.captureFrameCount = 0;
 
       console.log('[Audio Communication] Requesting microphone access...');
       
@@ -267,11 +276,16 @@ export class AudioCommunicationService {
       // Disconnect Web Audio API nodes
       if (this.audioProcessor) {
         this.audioProcessor.disconnect();
+        this.audioProcessor.onaudioprocess = null;
         this.audioProcessor = null;
       }
       if (this.audioSource) {
         this.audioSource.disconnect();
         this.audioSource = null;
+      }
+      if (this.monitorGain) {
+        this.monitorGain.disconnect();
+        this.monitorGain = null;
       }
 
       // Stop tracks
@@ -281,6 +295,7 @@ export class AudioCommunicationService {
       }
       this.micTrack = null;
       this.captureStarted = false; // Reset capture state
+      this.captureFrameCount = 0; // Reset frame counter
 
       // Clear accumulator
       this.txAcc = new Float32Array(0);
@@ -301,11 +316,32 @@ export class AudioCommunicationService {
   /**
    * IDEMPOTENT: Wire getUserMedia -> processor -> sendAudioPacket
    * Guaranteed to be called right after mic access is granted
+   * CRITICAL: ScriptProcessorNode MUST be connected to an output (destination) or onaudioprocess never fires
    */
   private startCaptureAndSend(): void {
     if (!this.mediaStream || !this.audioContext || this.audioContext.state === 'closed') {
       console.error('[Audio Communication] Cannot start capture: missing stream or invalid context');
       return;
+    }
+
+    // CRITICAL: Ensure captureStarted is false before starting
+    if (this.captureStarted) {
+      console.warn('[Audio Communication] ⚠️ Capture already started, cleaning up first');
+      // Clean up existing nodes
+      if (this.audioProcessor) {
+        this.audioProcessor.disconnect();
+        this.audioProcessor.onaudioprocess = null;
+        this.audioProcessor = null;
+      }
+      if (this.audioSource) {
+        this.audioSource.disconnect();
+        this.audioSource = null;
+      }
+      if (this.monitorGain) {
+        this.monitorGain.disconnect();
+        this.monitorGain = null;
+      }
+      this.captureStarted = false;
     }
 
     // Create audio source and processor
@@ -314,19 +350,37 @@ export class AudioCommunicationService {
     
     const inputSampleRate = this.audioContext.sampleRate;
     console.log(`[Audio Communication] Capture pipeline: sampleRate=${inputSampleRate}Hz, target=${SAMPLE_RATE}Hz`);
+    console.log(`[Audio Communication] AudioContext state: ${this.audioContext.state}`);
     
-    // Create monitorGain (not connected to destination to prevent echo)
-    const monitorGain = this.audioContext.createGain();
-    monitorGain.gain.value = 0;
+    // CRITICAL: Create monitorGain and connect to destination (gain=0 prevents echo but keeps graph alive)
+    // ScriptProcessorNode MUST have an output connection or onaudioprocess never fires
+    this.monitorGain = this.audioContext.createGain();
+    this.monitorGain.gain.value = 0; // Silent output (prevents echo)
+    this.monitorGain.connect(this.audioContext.destination); // CRITICAL: Connect to destination to keep graph alive
+    
+    // Reset frame counter
+    this.captureFrameCount = 0;
     
     // CRITICAL: Wire onaudioprocess handler - this is where packets are sent
     this.audioProcessor.onaudioprocess = (e) => {
+      // INSTRUMENTATION: Heartbeat every 50 frames
+      this.captureFrameCount++;
+      if (this.captureFrameCount % 50 === 0) {
+        console.log(`[CAPTURE] frames=${this.captureFrameCount}, audioCtx.state=${this.audioContext?.state || 'null'}, micTrack.enabled=${this.micTrack?.enabled ?? 'null'}, isMuted=${this.currentState.isMuted}`);
+      }
+      
       if (!this.voiceGatewayService.isConnected()) {
+        if (this.captureFrameCount % 50 === 0) {
+          console.warn(`[CAPTURE] Voice Gateway not connected, skipping frame ${this.captureFrameCount}`);
+        }
         return;
       }
       
       // Soft mute gate
       if (this.currentState.isMuted) {
+        if (this.captureFrameCount % 50 === 0) {
+          console.log(`[CAPTURE] Muted, skipping frame ${this.captureFrameCount}`);
+        }
         return;
       }
 
@@ -373,12 +427,14 @@ export class AudioCommunicationService {
       }
     };
 
-    // Connect pipeline
+    // CRITICAL: Connect pipeline - processor -> monitorGain -> destination
+    // This ensures onaudioprocess fires (ScriptProcessorNode needs output connection)
     this.audioSource.connect(this.audioProcessor);
-    this.audioProcessor.connect(monitorGain);
-    // monitorGain NOT connected to destination (prevents echo)
+    this.audioProcessor.connect(this.monitorGain);
+    // monitorGain already connected to destination above (gain=0 prevents echo)
     
-    console.log('[Audio Communication] ✅ Capture pipeline wired, packets will be sent when speaking');
+    console.log('[Audio Communication] ✅ Capture pipeline wired: source -> processor -> monitorGain(gain=0) -> destination');
+    console.log('[Audio Communication] ✅ onaudioprocess handler attached, capture will start on next audio frame');
   }
 
   // Note: Remote audio playback is handled by VoiceGatewayService (jitter buffer)
@@ -464,6 +520,7 @@ export class AudioCommunicationService {
       this.txAcc = new Float32Array(0);
       this.seqCounter = 0;
       this.captureStarted = false;
+      this.captureFrameCount = 0;
       
       this.currentState = {
         isRecording: false,
