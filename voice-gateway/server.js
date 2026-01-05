@@ -51,7 +51,7 @@ server.on('connection', (ws, req) => {
     return;
   }
 
-  // INSTRUMENTATION: Log callId/userId on connect
+  // INSTRUMENTATION: Log callId/userId on connect (verify callId consistency)
   console.log(`[Voice Gateway] ✅ New connection: userId=${userId}, callId=${callId}`);
 
   // Store connection metadata
@@ -62,21 +62,32 @@ server.on('connection', (ws, req) => {
     callId,
     connectedAt: Date.now(),
     packetsRelayed: 0,
-    packetsReceivedFromClient: 0, // INSTRUMENTATION: Track packets received from this client
+    packetsReceivedFromClient: 0, // INSTRUMENTATION: Track packets received from this client (not relayed)
   });
 
   // Join room
   if (!rooms.has(callId)) {
     rooms.set(callId, new Set());
+    console.log(`[Voice Gateway] Created new room: callId=${callId}`);
   }
   rooms.get(callId).add(ws);
 
   const roomSize = rooms.get(callId).size;
   console.log(`[Voice Gateway] User ${userId} joined call ${callId} (${roomSize} participant${roomSize !== 1 ? 's' : ''})`);
   
-  // INSTRUMENTATION: Log room participants
-  const participants = Array.from(rooms.get(callId)).map(ws => connections.get(ws)?.userId).filter(Boolean);
+  // INSTRUMENTATION: Log room participants to verify both users in same callId
+  const participants = Array.from(rooms.get(callId)).map(ws => {
+    const conn = connections.get(ws);
+    return conn ? `${conn.userId}(${conn.callId})` : 'unknown';
+  }).filter(Boolean);
   console.log(`[Voice Gateway] Room ${callId} participants: [${participants.join(', ')}]`);
+  
+  // INSTRUMENTATION: Verify callId consistency - warn if participants have different callIds
+  const allCallIds = Array.from(rooms.get(callId)).map(ws => connections.get(ws)?.callId).filter(Boolean);
+  const uniqueCallIds = [...new Set(allCallIds)];
+  if (uniqueCallIds.length > 1) {
+    console.error(`[Voice Gateway] ⚠️ WARNING: Room ${callId} has participants with different callIds: ${uniqueCallIds.join(', ')}`);
+  }
 
   // Initialize isAlive flag
   ws.isAlive = true;
@@ -96,12 +107,14 @@ server.on('connection', (ws, req) => {
       return;
     }
 
-    // INSTRUMENTATION: Increment per-user recv count (packets received FROM client)
+    // INSTRUMENTATION: Increment per-user recv count (packets received FROM client, not relayed)
     conn.packetsReceivedFromClient++;
     
-    // INSTRUMENTATION: Log every 100 received packets per user
+    // INSTRUMENTATION: Log every 100 received packets per user with userId, callId, roomSize
     if (conn.packetsReceivedFromClient % 100 === 0) {
-      console.log(`[Voice Gateway] ${conn.userId} received ${conn.packetsReceivedFromClient} packets from client (callId=${conn.callId})`);
+      const room = rooms.get(conn.callId);
+      const roomSize = room ? room.size : 0;
+      console.log(`[Voice Gateway] ${conn.userId} received ${conn.packetsReceivedFromClient} packets from client (callId=${conn.callId}, roomSize=${roomSize})`);
     }
 
     // Convert to Buffer if needed
@@ -146,6 +159,8 @@ server.on('connection', (ws, req) => {
     if (roomSize < 2) {
       if (conn.packetsReceivedFromClient % 50 === 0) {
         console.warn(`[Voice Gateway] ⚠️ Room ${conn.callId} has only ${roomSize} participant(s) - no receiver! User ${conn.userId} is sending but no one to receive.`);
+        const participants = Array.from(room).map(ws => connections.get(ws)?.userId).filter(Boolean);
+        console.warn(`[Voice Gateway] ⚠️ Room ${conn.callId} participants: [${participants.join(', ')}]`);
       }
       return; // No one to relay to
     }

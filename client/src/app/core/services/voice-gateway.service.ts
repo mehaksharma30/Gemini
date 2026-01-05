@@ -275,15 +275,16 @@ export class VoiceGatewayService {
             return;
           }
           
-          // INSTRUMENTATION: Log event.data type (define before try block for scope)
+          // INSTRUMENTATION: Log event.data constructor name
+          const dataConstructor = event.data?.constructor?.name || 'unknown';
           const dataType = event.data instanceof ArrayBuffer ? 'ArrayBuffer' :
                           event.data instanceof Blob ? 'Blob' :
                           typeof event.data === 'string' ? 'string' :
                           typeof event.data;
-          const dataConstructor = event.data?.constructor?.name || 'unknown';
           
           if (typeof event.data === 'string') {
-            // Text message (connection confirmation)
+            // Text message (connection confirmation) - log and ignore
+            console.log(`[Voice Gateway] RX: string message, constructor=${dataConstructor}, length=${event.data.length}`);
             try {
               const msg = JSON.parse(event.data);
               if (msg.type === 'connected') {
@@ -297,21 +298,22 @@ export class VoiceGatewayService {
           
           // Handle binary data (audio packets)
           let arrayBuffer: ArrayBuffer | null = null;
+          let byteLength: number = 0;
           
           try {
             if (event.data instanceof ArrayBuffer) {
               arrayBuffer = event.data;
+              byteLength = arrayBuffer.byteLength;
               // INSTRUMENTATION: Log ArrayBuffer details
-              if (this.packetsRecvCount < 5) {
-                console.log(`[Voice Gateway] RX: event.data type=${dataType} (${dataConstructor}), byteLength=${arrayBuffer.byteLength}`);
-              }
+              console.log(`[Voice Gateway] RX: event.data constructor=${dataConstructor}, type=${dataType}, byteLength=${byteLength}`);
             } else if (event.data instanceof Blob) {
-              // INSTRUMENTATION: Log Blob size before conversion
+              // INSTRUMENTATION: Support Blob - convert to ArrayBuffer
               const blobSize = event.data.size;
               arrayBuffer = await event.data.arrayBuffer();
-              // INSTRUMENTATION: Log Blob details and converted size
-              if (this.packetsRecvCount < 5) {
-                console.log(`[Voice Gateway] RX: event.data type=${dataType} (${dataConstructor}), Blob.size=${blobSize}, converted ArrayBuffer.byteLength=${arrayBuffer.byteLength}`);
+              if (arrayBuffer) {
+                byteLength = arrayBuffer.byteLength;
+                // INSTRUMENTATION: Log Blob details and converted size
+                console.log(`[Voice Gateway] RX: event.data constructor=${dataConstructor}, type=${dataType}, Blob.size=${blobSize}, converted ArrayBuffer.byteLength=${byteLength}`);
               }
             } else if (event.data && typeof event.data === 'object') {
               // Node.js ws library sends Buffer or Uint8Array
@@ -333,13 +335,19 @@ export class VoiceGatewayService {
               if (data.buffer && (data.buffer instanceof ArrayBuffer || data.buffer instanceof SharedArrayBuffer)) {
                 // Use the underlying ArrayBuffer (convert SharedArrayBuffer if needed)
                 const byteOffset = data.byteOffset || 0;
-                const byteLength = data.byteLength || data.length;
+                const dataByteLength = data.byteLength || data.length;
                 const underlyingBuffer = toArrayBuffer(data.buffer);
-                arrayBuffer = underlyingBuffer.slice(byteOffset, byteOffset + byteLength);
+                arrayBuffer = underlyingBuffer.slice(byteOffset, byteOffset + dataByteLength);
+                if (arrayBuffer) {
+                  byteLength = arrayBuffer.byteLength;
+                }
               } else if (data instanceof Uint8Array) {
                 // Create new ArrayBuffer from Uint8Array (handle SharedArrayBuffer)
                 const underlyingBuffer = toArrayBuffer(data.buffer);
                 arrayBuffer = underlyingBuffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+                if (arrayBuffer) {
+                  byteLength = arrayBuffer.byteLength;
+                }
               } else if (typeof data.length === 'number') {
                 // Try to convert Buffer-like object
                 const uint8 = new Uint8Array(data.length);
@@ -347,38 +355,43 @@ export class VoiceGatewayService {
                   uint8[i] = data[i];
                 }
                 arrayBuffer = uint8.buffer;
+                if (arrayBuffer) {
+                  byteLength = arrayBuffer.byteLength;
+                }
               } else {
-                console.warn('[Voice Gateway] Unknown binary data type:', data?.constructor?.name, 'keys:', Object.keys(data || {}));
+                console.warn(`[Voice Gateway] RX: Unknown binary data type, constructor=${data?.constructor?.name}, keys:`, Object.keys(data || {}));
                 return;
               }
             } else {
-              console.warn('[Voice Gateway] Received non-binary, non-string data:', typeof event.data, event.data?.constructor?.name);
+              console.warn(`[Voice Gateway] RX: Received non-binary, non-string data, type=${typeof event.data}, constructor=${event.data?.constructor?.name}`);
               return;
             }
             
-            if (arrayBuffer) {
-              // INSTRUMENTATION: Check if binary payload matches expected size and increment counter
-              const isOldFormat = arrayBuffer.byteLength === PACKET_SIZE_OLD; // 652 bytes
-              const isNewFormat = arrayBuffer.byteLength === PACKET_SIZE; // 676 bytes
+            if (arrayBuffer && byteLength > 0) {
+              // INSTRUMENTATION: Increment packetsRecvCount for ANY binary data (even before parsing)
+              // This ensures recv/sec reflects reality of what arrives at client
+              this.packetsRecvCount++;
               
-              if (isOldFormat || isNewFormat) {
-                // Increment counter when payload matches expected size
-                this.packetsRecvCount++;
-                
-                // INSTRUMENTATION: Log first 5 packet lengths
-                if (this.packetsRecvCount <= 5) {
-                  console.log(`[Voice Gateway] RX: packet #${this.packetsRecvCount}, byteLength=${arrayBuffer.byteLength}, format=${isNewFormat ? 'NEW(676)' : 'OLD(652)'}, event.data type=${dataType}`);
+              // INSTRUMENTATION: Log byteLength of incoming binary
+              if (this.packetsRecvCount <= 10) {
+                console.log(`[Voice Gateway] RX: packet #${this.packetsRecvCount}, byteLength=${byteLength}, constructor=${dataConstructor}, type=${dataType}`);
+              }
+              
+              // Check if binary payload matches expected size
+              const isOldFormat = byteLength === PACKET_SIZE_OLD; // 652 bytes
+              const isNewFormat = byteLength === PACKET_SIZE; // 676 bytes
+              
+              if (!isOldFormat && !isNewFormat) {
+                // Log unexpected size (but still count it in packetsRecvCount)
+                if (this.packetsRecvCount <= 10) {
+                  console.warn(`[Voice Gateway] RX: Unexpected packet size: ${byteLength} bytes (expected ${PACKET_SIZE_OLD} or ${PACKET_SIZE})`);
                 }
-              } else {
-                // Log unexpected size
-                if (this.packetsRecvCount < 5) {
-                  console.warn(`[Voice Gateway] RX: Unexpected packet size: ${arrayBuffer.byteLength} bytes (expected ${PACKET_SIZE_OLD} or ${PACKET_SIZE}), event.data type=${dataType}`);
-                }
+                // Still try to process it (handleAudioPacket will validate)
               }
               
               this.handleAudioPacket(arrayBuffer);
             } else {
-              console.warn('[Voice Gateway] Failed to convert message to ArrayBuffer');
+              console.warn('[Voice Gateway] Failed to convert message to ArrayBuffer or byteLength is 0');
             }
           } catch (error: any) {
             console.error('[Voice Gateway] Error handling binary message:', error, 'data type:', event.data?.constructor?.name);
