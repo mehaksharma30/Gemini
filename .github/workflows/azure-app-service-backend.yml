@@ -34,14 +34,6 @@ jobs:
         working-directory: server
         run: npm run build
 
-      - name: Enable WebSocket in Azure App Service
-        run: |
-          az webapp config set \
-            --name mindmemos-api-2026 \
-            --resource-group mindmemos-api-2026-group \
-            --web-sockets-enabled true \
-            --ids /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/mindmemos-api-2026-group/providers/Microsoft.Web/sites/mindmemos-api-2026 || echo "Note: WebSocket enablement may require manual configuration in Azure Portal"
-
       - name: Deploy to Azure Web App
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v2
@@ -49,4 +41,5 @@ jobs:
           app-name: 'mindmemos-api-2026'
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: './server'
+          startup-command: 'npm start'
 
