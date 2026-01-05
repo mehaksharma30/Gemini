@@ -48,6 +48,14 @@ export class VoiceGatewayService {
   private callId: string = '';
   private userId: string = '';
   
+  // Reconnection state
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 10;
+  private reconnectDelay: number = 1000; // Start with 1 second
+  private reconnectTimeout: any = null;
+  private isReconnecting: boolean = false;
+  private shouldReconnect: boolean = true;
+  
   // Audio context for playback
   private audioContext: AudioContext | null = null;
   private playbackGain: GainNode | null = null; // Dedicated gain node for remote audio playback (speaker mute/unmute)
@@ -93,18 +101,60 @@ export class VoiceGatewayService {
       return;
     }
 
+    // Cancel any pending reconnection
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
     this.callId = callId;
     this.userId = userId;
+    this.shouldReconnect = true;
+    this.reconnectAttempts = 0;
 
-    return new Promise((resolve, reject) => {
+    return this.attemptConnection(resolve, reject);
+  }
+
+  /**
+   * Attempt WebSocket connection with retry logic
+   */
+  private attemptConnection(resolve?: () => void, reject?: (error: Error) => void): Promise<void> {
+    return new Promise((innerResolve, innerReject) => {
+      const finalResolve = resolve || innerResolve;
+      const finalReject = reject || innerReject;
+
       try {
-        const url = `${GATEWAY_URL}/?callId=${encodeURIComponent(callId)}&userId=${encodeURIComponent(userId)}`;
-        console.log('[Voice Gateway] Connecting to:', url);
+        // Build WebSocket URL
+        const baseUrl = GATEWAY_URL;
+        const url = `${baseUrl}/?callId=${encodeURIComponent(this.callId)}&userId=${encodeURIComponent(this.userId)}`;
+        
+        console.log(`[Voice Gateway] 🔌 Connecting to: ${url}`);
+        console.log(`[Voice Gateway] Attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts}`);
+        
+        // Close existing connection if any
+        if (this.ws) {
+          this.ws.onclose = null; // Remove handlers to prevent reconnection loop
+          this.ws.onerror = null;
+          if (this.ws.readyState !== WebSocket.CLOSED) {
+            this.ws.close();
+          }
+        }
         
         this.ws = new WebSocket(url);
+        
+        // Connection lifecycle logging
+        const connectionStartTime = Date.now();
 
         this.ws.onopen = () => {
-          console.log('[Voice Gateway] Connected');
+          const connectionTime = Date.now() - connectionStartTime;
+          console.log(`[Voice Gateway] ✅ Connected successfully (${connectionTime}ms)`);
+          console.log(`[Voice Gateway] WebSocket readyState: ${this.ws?.readyState}, URL: ${url}`);
+          
+          // Reset reconnection state on successful connection
+          this.reconnectAttempts = 0;
+          this.reconnectDelay = 1000;
+          this.isReconnecting = false;
+          
           this.connectedSubject.next(true);
           
           // Initialize audio context for playback (separate from audio-communication service)
@@ -147,7 +197,9 @@ export class VoiceGatewayService {
             }, 1000);
           }
           
-          resolve();
+          if (finalResolve) {
+            finalResolve();
+          }
         };
 
         this.ws.onmessage = async (event) => {
@@ -230,31 +282,115 @@ export class VoiceGatewayService {
         };
 
         this.ws.onerror = (error: Event) => {
-          console.error('[Voice Gateway] WebSocket error:', error);
+          const connectionTime = Date.now() - connectionStartTime;
+          console.error(`[Voice Gateway] ❌ WebSocket error after ${connectionTime}ms:`, error);
+          console.error(`[Voice Gateway] Error details:`, {
+            type: error.type,
+            target: error.target,
+            readyState: this.ws?.readyState,
+            url: url
+          });
+          
           this.connectedSubject.next(false);
-          reject(new Error('WebSocket connection failed'));
+          
+          // Don't reject immediately - let onclose handle reconnection
+          if (finalReject && !this.isReconnecting) {
+            finalReject(new Error('WebSocket connection failed'));
+          }
         };
 
         this.ws.onclose = (event: CloseEvent) => {
-          console.log(`[Voice Gateway] Disconnected (code: ${event.code}, reason: ${event.reason || 'none'})`);
+          const connectionDuration = Date.now() - connectionStartTime;
+          console.log(`[Voice Gateway] 🔌 Disconnected (code: ${event.code}, reason: ${event.reason || 'none'}, duration: ${connectionDuration}ms)`);
+          console.log(`[Voice Gateway] Close event details:`, {
+            code: event.code,
+            reason: event.reason,
+            wasClean: event.wasClean,
+            readyState: this.ws?.readyState
+          });
+          
           this.connectedSubject.next(false);
           this.cleanupPlayback();
+          
+          // Attempt reconnection if not a clean close and we should reconnect
+          if (this.shouldReconnect && event.code !== 1000 && !event.wasClean) {
+            this.scheduleReconnect();
+          } else if (event.code === 1000) {
+            console.log('[Voice Gateway] Clean close - not reconnecting');
+          } else {
+            console.log('[Voice Gateway] Reconnection disabled or max attempts reached');
+          }
         };
       } catch (error: any) {
         console.error('[Voice Gateway] Connection error:', error);
-        reject(error);
+        this.connectedSubject.next(false);
+        if (finalReject) {
+          finalReject(error);
+        }
+        
+        // Schedule reconnection on error
+        if (this.shouldReconnect) {
+          this.scheduleReconnect();
+        }
       }
     });
+  }
+
+  /**
+   * Schedule reconnection with exponential backoff
+   */
+  private scheduleReconnect(): void {
+    if (this.isReconnecting || !this.shouldReconnect) {
+      return;
+    }
+
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.error(`[Voice Gateway] ❌ Max reconnection attempts (${this.maxReconnectAttempts}) reached. Stopping.`);
+      this.shouldReconnect = false;
+      return;
+    }
+
+    this.isReconnecting = true;
+    this.reconnectAttempts++;
+    
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+    const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 30000);
+    
+    console.log(`[Voice Gateway] 🔄 Scheduling reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
+    
+    this.reconnectTimeout = setTimeout(() => {
+      this.isReconnecting = false;
+      if (this.callId && this.userId && this.shouldReconnect) {
+        console.log(`[Voice Gateway] 🔄 Reconnecting... (attempt ${this.reconnectAttempts})`);
+        this.attemptConnection().catch(error => {
+          console.error('[Voice Gateway] Reconnection attempt failed:', error);
+          // Will schedule another reconnection via onclose handler
+        });
+      }
+    }, delay);
   }
 
   /**
    * Disconnect from Voice Gateway
    */
   async disconnect(): Promise<void> {
+    // Stop reconnection attempts
+    this.shouldReconnect = false;
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    this.isReconnecting = false;
+    
     this.cleanupPlayback();
     
     if (this.ws) {
-      this.ws.close();
+      // Remove handlers to prevent reconnection
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      if (this.ws.readyState !== WebSocket.CLOSED) {
+        this.ws.close(1000, 'Client disconnect');
+      }
       this.ws = null;
     }
     

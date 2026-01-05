@@ -26,22 +26,52 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     perMessageDeflate: false, // Disable compression for lower latency
     clientTracking: true,
     verifyClient: (info: { origin?: string; req: any; secure: boolean }) => {
+      // Get allowed origins from environment (same as CORS)
+      const allowedOrigins = process.env.FRONTEND_ORIGINS 
+        ? process.env.FRONTEND_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
+        : [
+            'http://localhost:4200',
+            'https://purple-moss-01574bd1e.4.azurestaticapps.net'
+          ];
+      
+      // Add legacy FRONTEND_URL if present
+      if (process.env.FRONTEND_URL) {
+        const legacyUrl = process.env.FRONTEND_URL.trim();
+        if (!allowedOrigins.includes(legacyUrl)) {
+          allowedOrigins.push(legacyUrl);
+        }
+      }
+      
       // Log connection attempts for debugging
       const pathname = info.req.url?.split('?')[0] || '';
       const origin = info.origin || 'unknown origin';
+      const host = info.req.headers.host || 'unknown';
+      const userAgent = info.req.headers['user-agent'] || 'unknown';
+      
       console.log(`[Voice Gateway] 🔄 Connection attempt from ${origin}`);
       console.log(`[Voice Gateway] Path: ${pathname}, Full URL: ${info.req.url}`);
+      console.log(`[Voice Gateway] Host: ${host}, Secure: ${info.secure}`);
       console.log(`[Voice Gateway] Upgrade header: ${info.req.headers.upgrade}`);
       console.log(`[Voice Gateway] Connection header: ${info.req.headers.connection}`);
       
-      // Accept connections to both /voice-gateway and /voice-gateway/
-      if (pathname === '/voice-gateway' || pathname === '/voice-gateway/') {
-        console.log(`[Voice Gateway] ✅ Accepting connection to ${pathname}`);
-        return true;
+      // Check path
+      if (pathname !== '/voice-gateway' && pathname !== '/voice-gateway/') {
+        console.warn(`[Voice Gateway] ❌ Rejected connection to invalid path: ${pathname}`);
+        return false;
       }
       
-      console.warn(`[Voice Gateway] ❌ Rejected connection to invalid path: ${pathname}`);
-      return false;
+      // Verify origin (for production security)
+      // In production, origin should match allowed origins
+      // In development, allow all origins for easier testing
+      const isProduction = process.env.NODE_ENV === 'production';
+      if (isProduction && origin !== 'unknown origin' && !allowedOrigins.includes(origin)) {
+        console.warn(`[Voice Gateway] ❌ Rejected connection from unauthorized origin: ${origin}`);
+        console.warn(`[Voice Gateway] Allowed origins: ${allowedOrigins.join(', ')}`);
+        return false;
+      }
+      
+      console.log(`[Voice Gateway] ✅ Accepting connection to ${pathname} from ${origin}`);
+      return true;
     }
   });
 

@@ -134,6 +134,9 @@ initializeVoiceGateway(httpServer);
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Voice Gateway WebSocket available at ws://localhost:${PORT}/voice-gateway`);
+  console.log(`Allowed CORS origins: ${allowedOrigins.join(', ')}`);
+  console.log(`WebSocket enabled: true`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 export default app;
