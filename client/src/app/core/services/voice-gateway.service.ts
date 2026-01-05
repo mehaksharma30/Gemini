@@ -641,8 +641,12 @@ export class VoiceGatewayService {
       return;
     }
     
-    if (data.byteLength !== PACKET_SIZE) {
-      console.warn(`[Voice Gateway] Invalid packet size: ${data.byteLength} (expected ${PACKET_SIZE})`);
+    // Support both old format (652 bytes) and new format (676 bytes with senderId)
+    const isOldFormat = data.byteLength === PACKET_SIZE_OLD;
+    const isNewFormat = data.byteLength === PACKET_SIZE;
+    
+    if (!isOldFormat && !isNewFormat) {
+      console.warn(`[Voice Gateway] Invalid packet size: ${data.byteLength} (expected ${PACKET_SIZE_OLD} or ${PACKET_SIZE})`);
       return;
     }
 
@@ -650,7 +654,29 @@ export class VoiceGatewayService {
       const view = new DataView(data);
       const seq = view.getUint32(0, true); // Little-endian
       const timestampMs = Number(view.getBigUint64(4, true)); // Little-endian
-      const payload = data.slice(12); // 640 bytes
+      
+      // Extract senderId if new format, or use empty string for old format
+      let senderId = '';
+      let payloadOffset = 12;
+      
+      if (isNewFormat) {
+        // Extract senderId (24 bytes, UTF-8)
+        const senderIdBytes = new Uint8Array(data, 12, SENDER_ID_SIZE);
+        senderId = new TextDecoder('utf-8').decode(senderIdBytes).replace(/\0/g, ''); // Remove null padding
+        
+        // CRITICAL: Ignore packets from self to prevent loopback/echo
+        if (senderId && senderId === this.userId) {
+          // Log first few self-packets for debugging
+          if (this.packetsRecvCount < 5) {
+            console.warn(`[Voice Gateway] ⚠️ Ignoring self packet (senderId=${senderId}, localUserId=${this.userId})`);
+          }
+          return;
+        }
+        
+        payloadOffset = 36; // 12 + 24
+      }
+      
+      const payload = data.slice(payloadOffset); // 640 bytes
 
       // Add to jitter buffer
       this.jitterBuffer.set(seq, { timestamp: timestampMs, payload });
