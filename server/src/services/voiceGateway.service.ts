@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server as HttpServer } from 'http';
 
-const PING_INTERVAL = 30000; // 30 seconds
+const PING_INTERVAL = 10000; // 10 seconds - more frequent keepalive for better connection stability
 
 // Store rooms: callId -> Set of WebSocket connections
 const rooms = new Map<string, Set<WebSocket>>();
@@ -236,6 +236,14 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     }).filter(Boolean);
     console.log(`[Voice Gateway] 📋 Room ${normalizedCallId} participants: [${allParticipants.join(', ')}]`);
     
+    // CRITICAL: If room has 2 participants, log success
+    if (roomSize === 2) {
+      console.log(`[Voice Gateway] 🎉🎉🎉 SUCCESS: Room ${normalizedCallId} now has 2 participants - ready for two-way communication!`);
+      console.log(`[Voice Gateway] 🎉 Participants: [${allParticipants.join(', ')}]`);
+    } else if (roomSize === 1) {
+      console.warn(`[Voice Gateway] ⚠️ WARNING: Room ${normalizedCallId} has only 1 participant (${userId}). Waiting for second user to join...`);
+    }
+    
     // INSTRUMENTATION: Log room participants to verify both users in same callId
     const participants = Array.from(rooms.get(normalizedCallId)!).map(roomWs => {
       const c = connections.get(roomWs);
@@ -281,10 +289,19 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
 
     // Initialize isAlive flag
     (ws as any).isAlive = true;
+    (ws as any).lastPongTime = Date.now();
 
     // Handle pong for keepalive
     ws.on('pong', () => {
       (ws as any).isAlive = true;
+      (ws as any).lastPongTime = Date.now();
+      const conn = connections.get(ws);
+      if (conn) {
+        // Log pong received (first few times only)
+        if ((conn.packetsReceived || 0) < 5) {
+          console.log(`[Voice Gateway] ✅ Pong received from ${conn.userId} (callId: ${conn.callId})`);
+        }
+      }
     });
 
     // Handle incoming binary messages (audio packets)
@@ -770,19 +787,61 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     }, 100);
   });
 
-  // Ping/pong keepalive
+  // Ping/pong keepalive with improved monitoring
   setInterval(() => {
+    const now = Date.now();
     wss.clients.forEach((ws) => {
-      if ((ws as any).isAlive === false) {
-        const conn = connections.get(ws);
-        console.log(`[Voice Gateway] ⚠️⚠️⚠️ Terminating inactive connection (no pong response): ${conn?.userId || 'unknown'}, callId: ${conn?.callId || 'unknown'}`);
-        return ws.terminate();
+      const conn = connections.get(ws);
+      const isAlive = (ws as any).isAlive;
+      const lastPongTime = (ws as any).lastPongTime || 0;
+      const timeSinceLastPong = now - lastPongTime;
+      
+      // Check if connection is dead (no pong response)
+      if (isAlive === false) {
+        console.log(`[Voice Gateway] ⚠️⚠️⚠️ Terminating inactive connection (no pong response): ${conn?.userId || 'unknown'}, callId: ${conn?.callId || 'unknown'}, timeSinceLastPong: ${timeSinceLastPong}ms`);
+        
+        // Remove from room before terminating
+        if (conn) {
+          const room = rooms.get(conn.callId);
+          if (room) {
+            room.delete(ws);
+            if (room.size === 0) {
+              rooms.delete(conn.callId);
+              console.log(`[Voice Gateway] Room ${conn.callId} closed (no participants after disconnect)`);
+            } else {
+              console.log(`[Voice Gateway] Room ${conn.callId} now has ${room.size} participant${room.size !== 1 ? 's' : ''} after disconnect`);
+            }
+          }
+          connections.delete(ws);
+        }
+        
+        try {
+          ws.terminate();
+        } catch (error) {
+          // Connection might already be closed
+        }
+        return;
       }
+      
+      // Mark as potentially dead, ping will reset if connection is alive
       (ws as any).isAlive = false;
+      
+      // Send ping
       try {
-        ws.ping();
-      } catch (error) {
-        // Connection might be closed, ignore
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.ping();
+          // Log ping sent (first few times only)
+          if (conn && (conn.packetsReceived || 0) < 5) {
+            console.log(`[Voice Gateway] 📡 Ping sent to ${conn.userId} (callId: ${conn.callId})`);
+          }
+        } else {
+          // WebSocket is not open, mark as dead
+          (ws as any).isAlive = false;
+        }
+      } catch (error: any) {
+        // Connection might be closed, mark as dead
+        (ws as any).isAlive = false;
+        console.warn(`[Voice Gateway] Error sending ping to ${conn?.userId || 'unknown'}:`, error.message);
       }
     });
   }, PING_INTERVAL);

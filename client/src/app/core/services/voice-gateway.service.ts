@@ -52,11 +52,15 @@ export class VoiceGatewayService {
   
   // Reconnection state
   private reconnectAttempts: number = 0;
-  private maxReconnectAttempts: number = 10;
+  private maxReconnectAttempts: number = 20; // Increased from 10 to 20 for better reliability
   private reconnectDelay: number = 1000; // Start with 1 second
   private reconnectTimeout: any = null;
   private isReconnecting: boolean = false;
   private shouldReconnect: boolean = true;
+  
+  // Connection health monitoring
+  private lastMessageTime: number = 0;
+  private healthCheckInterval: any = null;
   
   // Audio context for playback
   private audioContext: AudioContext | null = null;
@@ -143,6 +147,10 @@ export class VoiceGatewayService {
     if (this.statsLogInterval) {
       clearInterval(this.statsLogInterval);
       this.statsLogInterval = null;
+    }
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
     }
 
     // Cancel any pending reconnection
@@ -266,6 +274,16 @@ export class VoiceGatewayService {
             this.logStats();
           }, 1000);
           
+          // Start connection health monitoring
+          this.lastMessageTime = Date.now();
+          if (this.healthCheckInterval) {
+            clearInterval(this.healthCheckInterval);
+            this.healthCheckInterval = null;
+          }
+          this.healthCheckInterval = setInterval(() => {
+            this.checkConnectionHealth();
+          }, 5000); // Check every 5 seconds
+          
           resolve();
         };
 
@@ -286,6 +304,9 @@ export class VoiceGatewayService {
         
         // CRITICAL: Attach handler first, then verify
         this.ws.onmessage = async (event) => {
+          // CRITICAL: Update last message time for health monitoring
+          this.lastMessageTime = Date.now();
+          
           // CRITICAL: Log EVERY message received to diagnose why recv/sec=0
           // INSTRUMENTATION: Log WebSocket state when message arrives
           const wsState = this.ws?.readyState ?? 'null';
@@ -485,7 +506,7 @@ export class VoiceGatewayService {
         
         this.ws.onclose = (event: CloseEvent) => {
           const connectionDuration = Date.now() - connectionStartTime;
-          console.log(`[Voice Gateway] 🔌 WebSocket CLOSED (code: ${event.code}, reason: ${event.reason || 'none'}, duration: ${connectionDuration}ms)`);
+          console.log(`[Voice Gateway] 🔌 WebSocket CLOSED (code: ${event.code}, reason: ${event.reason || 'none'}, duration: ${connectionDuration}ms, wasClean: ${event.wasClean})`);
           
           this.connectedSubject.next(false);
           this.cleanupPlayback();
@@ -508,9 +529,17 @@ export class VoiceGatewayService {
             this.activeUserId = null;
           }
           
-          // Attempt reconnection if not a clean close
-          if (this.shouldReconnect && event.code !== 1000 && !event.wasClean) {
+          // CRITICAL: Attempt reconnection for ANY unexpected close (not just non-clean closes)
+          // This ensures we reconnect even if the connection drops due to network issues
+          // Only skip reconnection if it was a clean close (code 1000) AND we're not in an active call
+          const isCleanClose = event.code === 1000 && event.wasClean;
+          const isActiveCall = this.callId && this.userId; // If we have callId/userId, we're in a call
+          
+          if (this.shouldReconnect && (!isCleanClose || isActiveCall)) {
+            console.log(`[Voice Gateway] 🔄 Scheduling reconnection (code: ${event.code}, wasClean: ${event.wasClean}, isActiveCall: ${isActiveCall})`);
             this.scheduleReconnect();
+          } else {
+            console.log(`[Voice Gateway] ⏹️ Not reconnecting (clean close and not in active call)`);
           }
         };
       } catch (error: any) {
@@ -531,6 +560,7 @@ export class VoiceGatewayService {
    */
   private scheduleReconnect(): void {
     if (this.isReconnecting || !this.shouldReconnect) {
+      console.log(`[Voice Gateway] ⏹️ Reconnection skipped (isReconnecting: ${this.isReconnecting}, shouldReconnect: ${this.shouldReconnect})`);
       return;
     }
 
@@ -546,16 +576,26 @@ export class VoiceGatewayService {
     // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
     const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 30000);
     
-    console.log(`[Voice Gateway] 🔄 Scheduling reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
+    console.log(`[Voice Gateway] 🔄 Scheduling reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms (callId: ${this.callId}, userId: ${this.userId})`);
     
     this.reconnectTimeout = setTimeout(() => {
       this.isReconnecting = false;
       if (this.callId && this.userId && this.shouldReconnect) {
-        console.log(`[Voice Gateway] 🔄 Reconnecting... (attempt ${this.reconnectAttempts})`);
-        this.attemptConnection().catch(error => {
+        console.log(`[Voice Gateway] 🔄 Reconnecting... (attempt ${this.reconnectAttempts}, callId: ${this.callId}, userId: ${this.userId})`);
+        this.attemptConnection().then(() => {
+          console.log(`[Voice Gateway] ✅ Reconnection successful (attempt ${this.reconnectAttempts})`);
+          this.reconnectAttempts = 0; // Reset on success
+        }).catch(error => {
           console.error('[Voice Gateway] Reconnection attempt failed:', error);
-          // Will schedule another reconnection via onclose handler
+          // Will schedule another reconnection via onclose handler or health check
+          this.isReconnecting = false;
+          if (this.shouldReconnect) {
+            this.scheduleReconnect();
+          }
         });
+      } else {
+        console.log(`[Voice Gateway] ⏹️ Reconnection cancelled (callId: ${this.callId}, userId: ${this.userId}, shouldReconnect: ${this.shouldReconnect})`);
+        this.isReconnecting = false;
       }
     }, delay);
   }
@@ -1077,6 +1117,37 @@ export class VoiceGatewayService {
   }
 
   /**
+   * Check connection health and reconnect if needed
+   */
+  private checkConnectionHealth(): void {
+    if (!this.ws || !this.callId || !this.userId) {
+      return;
+    }
+    
+    const now = Date.now();
+    const timeSinceLastMessage = now - this.lastMessageTime;
+    const wsState = this.ws.readyState;
+    
+    // If WebSocket is not open, try to reconnect
+    if (wsState !== WebSocket.OPEN) {
+      console.warn(`[Voice Gateway] ⚠️ Connection health check failed: WebSocket state is ${wsState} (expected OPEN=1)`);
+      if (this.shouldReconnect && !this.isReconnecting) {
+        console.log(`[Voice Gateway] 🔄 Triggering reconnection due to unhealthy connection state`);
+        this.scheduleReconnect();
+      }
+      return;
+    }
+    
+    // If we haven't received any messages in 20 seconds, the connection might be dead
+    // (Note: ping/pong is handled automatically by the browser, but we check for actual data)
+    if (timeSinceLastMessage > 20000 && this.lastMessageTime > 0) {
+      console.warn(`[Voice Gateway] ⚠️ Connection health check: No messages received in ${timeSinceLastMessage}ms`);
+      // Don't reconnect immediately - might just be a quiet period
+      // But log it for debugging
+    }
+  }
+  
+  /**
    * Cleanup playback state
    */
   private cleanupPlayback(): void {
@@ -1090,6 +1161,12 @@ export class VoiceGatewayService {
     if (this.statsLogInterval) {
       clearInterval(this.statsLogInterval);
       this.statsLogInterval = null;
+    }
+    
+    // Stop health check
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
     }
     
     // Stop all scheduled sources
