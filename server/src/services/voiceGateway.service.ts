@@ -479,19 +479,16 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         return;
       }
       
+      // CRITICAL: ALWAYS log first 100 relay attempts (NO rate limiting)
+      const allParticipants = Array.from(room).map(roomWs => {
+        const c = connections.get(roomWs);
+        const isSender = roomWs === ws;
+        return c ? `${c.userId}(readyState=${roomWs.readyState}, callId=${c.callId}${isSender ? ', SENDER' : ''})` : 'unknown';
+      }).filter(Boolean);
+      
       if (conn.packetsRelayed < 100) {
-        const allParticipants = Array.from(room).map(roomWs => {
-          const c = connections.get(roomWs);
-          const isSender = roomWs === ws;
-          return c ? `${c.userId}(readyState=${roomWs.readyState}, callId=${c.callId}${isSender ? ', SENDER' : ''})` : 'unknown';
-        }).filter(Boolean);
         console.log(`[Voice Gateway] 🔄 Relay attempt #${conn.packetsRelayed + 1}: sender=${conn.userId}, roomSize=${roomSize}, packetSize=${packetWithSender.length}, participants: [${allParticipants.join(', ')}]`);
       } else if (conn.packetsRelayed % 100 === 0) {
-        // Log every 100th packet after first 100
-        const allParticipants = Array.from(room).map(roomWs => {
-          const c = connections.get(roomWs);
-          return c ? `${c.userId}(readyState=${roomWs.readyState})` : 'unknown';
-        }).filter(Boolean);
         console.log(`[Voice Gateway] 🔄 Relay attempt #${conn.packetsRelayed + 1}: sender=${conn.userId}, roomSize=${roomSize}, participants: [${allParticipants.join(', ')}]`);
       }
       
@@ -582,32 +579,44 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         
         try {
           // CRITICAL: Send packet - this is where the actual relay happens
-          // CRITICAL: Log EVERY send attempt for first 100 packets
+          // CRITICAL: Log EVERY send attempt for first 100 packets (NO rate limiting)
           if (conn.packetsRelayed < 100) {
-            console.log(`[Voice Gateway] 📤 Sending packet to ${otherConn.userId}: readyState=${wsReadyState}, packetSize=${packetWithSender.length} bytes, callId=${otherConn.callId}`);
+            console.log(`[Voice Gateway] 📤 SENDING packet #${conn.packetsRelayed + 1} to ${otherConn.userId}: readyState=${wsReadyState}, packetSize=${packetWithSender.length} bytes, callId=${otherConn.callId}, isBuffer=${Buffer.isBuffer(packetWithSender)}`);
           }
           
-          // CRITICAL: Send as binary (Buffer is automatically sent as binary, but be explicit)
-          // The ws library automatically detects Buffer and sends as binary
-          otherWs.send(packetWithSender);
+          // CRITICAL: Send as binary - Buffer is automatically sent as binary by ws library
+          // The ws library automatically detects Buffer and sends as binary frame
+          // send() returns false if the buffer is full (backpressure), true otherwise
+          const sendSucceeded = otherWs.send(packetWithSender, (error?: Error) => {
+            if (error) {
+              console.error(`[Voice Gateway] ❌ Send callback error for ${otherConn.userId}:`, error.message);
+            } else if (conn.packetsRelayed < 10) {
+              console.log(`[Voice Gateway] ✅ Send callback success for ${otherConn.userId}`);
+            }
+          });
+          
+          // Log send result (false = backpressure, but packet is still queued)
+          if (conn.packetsRelayed < 10) {
+            console.log(`[Voice Gateway] 📤 Send() called for ${otherConn.userId}, succeeded=${sendSucceeded}, packetSize=${packetWithSender.length}`);
+          }
           
           recipients.push(otherConn.userId);
           relayed++;
           
           // INSTRUMENTATION: Log first successful relay and every 100th
           if (conn.packetsRelayed === 0 && relayed === 1) {
-            console.log(`[Voice Gateway] ✅ First successful relay: ${conn.userId} -> ${otherConn.userId}, packetSize=${packetWithSender.length} bytes, callId=${conn.callId}`);
+            console.log(`[Voice Gateway] ✅✅✅ FIRST SUCCESSFUL RELAY: ${conn.userId} -> ${otherConn.userId}, packetSize=${packetWithSender.length} bytes, callId=${conn.callId}`);
           } else if (relayed > 0 && (conn.packetsRelayed + relayed) % 100 === 0) {
             console.log(`[Voice Gateway] ✅ Relayed ${conn.packetsRelayed + relayed} packets: ${conn.userId} -> ${otherConn.userId}`);
           } else if (conn.packetsRelayed < 10) {
             // Log first 10 successful sends
-            console.log(`[Voice Gateway] ✅ Sent packet #${conn.packetsRelayed + relayed} to ${otherConn.userId} (readyState=${wsReadyState}, binary=true)`);
+            console.log(`[Voice Gateway] ✅✅✅ Sent packet #${conn.packetsRelayed + relayed} to ${otherConn.userId} (readyState=${wsReadyState}, binary=true, size=${packetWithSender.length})`);
           }
         } catch (error: any) {
           // CRITICAL: Always log send errors (not rate-limited)
           const errorType = error && typeof error === 'object' && error.constructor ? error.constructor.name : typeof error;
           const errorMessage = error?.message || String(error) || 'unknown error';
-          console.error(`[Voice Gateway] ❌ Error sending packet to ${otherConn.userId}:`, errorMessage, `CallId: ${otherConn.callId}, readyState: ${wsReadyState}, error type: ${errorType}`);
+          console.error(`[Voice Gateway] ❌❌❌ ERROR sending packet to ${otherConn.userId}:`, errorMessage, `CallId: ${otherConn.callId}, readyState: ${wsReadyState}, error type: ${errorType}`);
           skippedRecipients.push(`${otherConn.userId}(error: ${errorMessage})`);
         }
       });
