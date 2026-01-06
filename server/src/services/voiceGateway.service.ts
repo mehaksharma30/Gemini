@@ -814,13 +814,30 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     setTimeout(() => {
       try {
         if (ws.readyState === WebSocket.OPEN) {
+          // Send connection confirmation
           ws.send(JSON.stringify({
             type: 'connected',
             callId: normalizedCallId, // CRITICAL FIX: Use normalized callId
             userId,
             timestamp: Date.now(),
           }));
-          console.log(`[Voice Gateway] Sent connection confirmation to ${userId} for call ${normalizedCallId}`);
+          console.log(`[Voice Gateway] ✅ Sent connection confirmation to ${userId} for call ${normalizedCallId}`);
+          
+          // CRITICAL: Send room status immediately to help client verify connection
+          const currentRoomSize = rooms.get(normalizedCallId)?.size || 0;
+          const currentParticipants = Array.from(rooms.get(normalizedCallId) || []).map(rws => {
+            const rc = connections.get(rws);
+            return rc ? rc.userId : 'unknown';
+          }).filter(Boolean);
+          
+          ws.send(JSON.stringify({
+            type: 'room_status',
+            callId: normalizedCallId,
+            roomSize: currentRoomSize,
+            participants: currentParticipants,
+            ready: currentRoomSize >= 2
+          }));
+          console.log(`[Voice Gateway] ✅ Sent initial room_status to ${userId}: roomSize=${currentRoomSize}, participants=[${currentParticipants.join(', ')}]`);
           
           // CRITICAL TEST: Send a test binary packet to verify binary transmission works
           // This will help diagnose if binary packets can be received at all
@@ -838,9 +855,11 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
           } catch (testError: any) {
             console.error(`[Voice Gateway] ❌ Error sending test binary packet to ${userId}:`, testError.message);
           }
+        } else {
+          console.warn(`[Voice Gateway] ⚠️ Cannot send connection confirmation: WebSocket readyState=${ws.readyState} (not OPEN=1)`);
         }
       } catch (error: any) {
-        console.error(`[Voice Gateway] Error sending connection confirmation:`, error.message);
+        console.error(`[Voice Gateway] ❌ Error sending connection confirmation:`, error.message);
       }
     }, 100);
   });

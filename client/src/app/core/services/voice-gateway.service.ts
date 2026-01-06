@@ -11,10 +11,11 @@ const PACKET_SIZE_OLD = 12 + PAYLOAD_SIZE; // Old format: header (12) + payload 
 const PACKET_SIZE = 12 + 24 + PAYLOAD_SIZE; // New format: seq (4) + timestamp (8) + senderId (24) + payload (640) = 676 bytes
 const SENDER_ID_SIZE = 24; // Fixed 24 bytes for senderId
 
-// Jitter buffer settings
-const MIN_BUFFER_PACKETS = 25; // ~500ms buffer before starting playback
-const MAX_BUFFER_PACKETS = 50; // ~1000ms max buffer
-const LOW_BUFFER_THRESHOLD = 12; // Pause scheduling if buffer drops below this (but don't reset state)
+// Jitter buffer settings - Optimized for smooth WhatsApp-like calls
+// Reduced buffer sizes for lower latency while maintaining smooth playback
+const MIN_BUFFER_PACKETS = 10; // ~200ms buffer before starting playback (reduced from 25 for lower latency)
+const MAX_BUFFER_PACKETS = 30; // ~600ms max buffer (reduced from 50)
+const LOW_BUFFER_THRESHOLD = 5; // Pause scheduling if buffer drops below this (reduced from 12 for faster recovery)
 
 // Voice Gateway WebSocket URL (from environment)
 const GATEWAY_URL = environment.voiceGatewayUrl;
@@ -371,12 +372,17 @@ export class VoiceGatewayService {
                   console.error(`[Voice Gateway] ⚠️ WARNING: Server userId (${msg.userId}) doesn't match local userId (${this.userId})!`);
                 }
               } else if (msg.type === 'room_status') {
-                console.log(`[Voice Gateway] 📊 Room status: callId=${msg.callId}, roomSize=${msg.roomSize}, participants: [${msg.participants?.join(', ') || 'none'}]`);
+                console.log(`[Voice Gateway] 📊 Room status: callId=${msg.callId}, roomSize=${msg.roomSize}, participants: [${msg.participants?.join(', ') || 'none'}], ready=${msg.ready || false}`);
                 // CRITICAL: Verify we're in the right room
                 if (msg.roomSize < 2) {
-                  console.warn(`[Voice Gateway] ⚠️ WARNING: Room has only ${msg.roomSize} participant(s) - no other user in call!`);
+                  console.warn(`[Voice Gateway] ⚠️ WARNING: Room has only ${msg.roomSize} participant(s) - waiting for second user to join...`);
+                  console.warn(`[Voice Gateway] ⚠️ Expected callId format: <userId1>-<userId2> (sorted user IDs)`);
+                  console.warn(`[Voice Gateway] ⚠️ Current callId: "${msg.callId}", Local callId: "${this.callId}"`);
                 } else {
-                  console.log(`[Voice Gateway] ✅ Room has ${msg.roomSize} participants - ready for audio relay`);
+                  console.log(`[Voice Gateway] ✅✅✅ Room has ${msg.roomSize} participants - ready for audio relay!`);
+                  if (msg.ready) {
+                    console.log(`[Voice Gateway] 🎉 Call is ready - both users connected!`);
+                  }
                 }
               } else {
                 console.log('[Voice Gateway] Received text message:', msg);
@@ -931,13 +937,14 @@ export class VoiceGatewayService {
     // Check if we should start playback (first time only)
     if (!this.isPlaying) {
       if (this.jitterBuffer.size >= MIN_BUFFER_PACKETS) {
-        // Initialize playback
+        // Initialize playback with optimized delay for smooth start
         const seqs = Array.from(this.jitterBuffer.keys()).sort((a, b) => a - b);
         this.nextPlaybackSeq = seqs[0];
-        this.nextPlayTime = this.audioContext.currentTime + 0.30; // 300ms initial delay
+        // Reduced initial delay from 300ms to 150ms for faster call start (WhatsApp-like)
+        this.nextPlayTime = this.audioContext.currentTime + 0.15;
         this.isPlaying = true;
         this.isSchedulingPaused = false;
-        console.log(`[Voice Gateway] Starting playback from seq ${this.nextPlaybackSeq} (buffer: ${this.jitterBuffer.size} packets, speakerMuted=${this.isSpeakerMuted})`);
+        console.log(`[Voice Gateway] 🎵 Starting playback from seq ${this.nextPlaybackSeq} (buffer: ${this.jitterBuffer.size} packets, initialDelay=150ms, speakerMuted=${this.isSpeakerMuted})`);
         
         // Start periodic scheduler (every 20ms)
         // IMPORTANT: Scheduler continues even when muted - playbackGain controls silence
@@ -956,11 +963,12 @@ export class VoiceGatewayService {
 
     // Check if we should pause scheduling due to low buffer (but keep playback state intact)
     // NEVER set isPlaying=false or reset nextPlayTime/nextPlaybackSeq
+    // CRITICAL: Only pause if buffer is critically low (below threshold) AND we're actively playing
     if (this.isPlaying && this.jitterBuffer.size < LOW_BUFFER_THRESHOLD) {
       if (!this.isSchedulingPaused) {
         // Pause scheduling but keep all state intact
         this.isSchedulingPaused = true;
-        console.log(`[Voice Gateway] Scheduling paused (low buffer: ${this.jitterBuffer.size} packets) - state preserved`);
+        console.warn(`[Voice Gateway] ⚠️ Scheduling paused (low buffer: ${this.jitterBuffer.size} < ${LOW_BUFFER_THRESHOLD} packets) - waiting for more packets`);
       }
       return; // Don't schedule new packets, but don't reset anything
     }

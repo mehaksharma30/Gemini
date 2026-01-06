@@ -2414,11 +2414,32 @@ export class PanicComponent implements OnInit, OnDestroy {
       // Send accept signal
       await this.panicCallService.sendCallAccept(this.currentCallId, this.incomingCall.fromUserId);
       
-      // Initialize audio communication with Web PubSub (callee)
-      await this.audioCommService.initialize(currentUser.id, this.incomingCall.fromUserId);
+      // CRITICAL: Initialize audio communication with Voice Gateway (callee)
+      // This connects to the Voice Gateway with the same callId format as the caller
+      console.log('[Testing Talk] Step 1: Initializing audio communication for callee...');
+      console.log('[Testing Talk] Callee userId:', currentUser.id, ', Caller userId:', this.incomingCall.fromUserId);
       
-      // Start recording automatically when accepting call
-      await this.audioCommService.startRecording();
+      try {
+        await this.audioCommService.initialize(currentUser.id, this.incomingCall.fromUserId);
+        console.log('[Testing Talk] ✅ Audio communication initialized');
+        
+        // Wait a moment for connection to stabilize
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        // Verify connection is ready
+        const state = this.audioCommService.getState();
+        if (!state.isConnected) {
+          throw new Error('Audio connection not ready after initialization');
+        }
+        
+        // Start recording automatically when accepting call
+        console.log('[Testing Talk] Step 2: Starting recording...');
+        await this.audioCommService.startRecording();
+        console.log('[Testing Talk] ✅ Recording started');
+      } catch (error: any) {
+        console.error('[Testing Talk] ❌ Error initializing audio:', error);
+        throw error; // Re-throw to be caught by outer try-catch
+      }
       
       this.toastService.show(`Connected to ${this.incomingCall.fromName}`, 'success');
       console.log('[Testing Talk] Incoming call accepted');
