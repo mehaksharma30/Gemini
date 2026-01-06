@@ -987,24 +987,63 @@ export class VoiceGatewayService {
 
     try {
       // Convert Int16 PCM to Float32
+      // CRITICAL: pcmData should be 640 bytes (320 samples * 2 bytes)
+      if (pcmData.byteLength !== PAYLOAD_SIZE) {
+        console.warn(`[Voice Gateway] Invalid payload size: ${pcmData.byteLength} bytes (expected ${PAYLOAD_SIZE})`);
+        return;
+      }
+      
       const int16Array = new Int16Array(pcmData);
       const float32Array = new Float32Array(int16Array.length);
+      
+      // CRITICAL: Convert Int16 (-32768 to 32767) to Float32 (-1.0 to 1.0)
+      // Use consistent divisor: 32768 (0x8000) for all values
       for (let i = 0; i < int16Array.length; i++) {
-        // Convert Int16 (-32768 to 32767) to Float32 (-1.0 to 1.0)
-        float32Array[i] = int16Array[i] / (int16Array[i] < 0 ? 0x8000 : 0x7FFF);
+        float32Array[i] = int16Array[i] / 32768.0;
+      }
+      
+      // CRITICAL: Verify we have the right number of samples
+      if (int16Array.length !== SAMPLES_PER_FRAME) {
+        console.warn(`[Voice Gateway] Invalid sample count: ${int16Array.length} (expected ${SAMPLES_PER_FRAME})`);
+        return;
       }
 
-      // Create audio buffer with correct sample rate
-      // CRITICAL: Use audioContext.sampleRate, not SAMPLE_RATE constant
-      // The buffer sample rate must match the audioContext sample rate
+      // CRITICAL: Upsample from 16kHz to AudioContext sample rate (usually 48kHz)
+      // If we don't upsample, audio will play at wrong speed (3x too fast if 48kHz)
       const bufferSampleRate = this.audioContext.sampleRate;
-      const buffer = this.audioContext.createBuffer(1, float32Array.length, bufferSampleRate);
-      buffer.copyToChannel(float32Array, 0);
+      let finalAudioData: Float32Array;
       
-      // Log sample rate mismatch if detected (first few times only)
-      if (bufferSampleRate !== SAMPLE_RATE && this.packetsRecvCount < 10) {
-        console.warn(`[Voice Gateway] Sample rate mismatch in playback: buffer=${bufferSampleRate}Hz, source=${SAMPLE_RATE}Hz. Audio may be speeded/slowed.`);
+      if (bufferSampleRate !== SAMPLE_RATE) {
+        // Upsample from 16kHz to target rate
+        const ratio = bufferSampleRate / SAMPLE_RATE;
+        const outputLength = Math.floor(float32Array.length * ratio);
+        finalAudioData = new Float32Array(outputLength);
+        
+        // Simple linear interpolation upsampling
+        for (let i = 0; i < outputLength; i++) {
+          const srcIndex = i / ratio;
+          const srcIndexFloor = Math.floor(srcIndex);
+          const srcIndexCeil = Math.min(srcIndexFloor + 1, float32Array.length - 1);
+          const fraction = srcIndex - srcIndexFloor;
+          
+          if (srcIndexFloor === srcIndexCeil) {
+            finalAudioData[i] = float32Array[srcIndexFloor];
+          } else {
+            // Linear interpolation
+            finalAudioData[i] = float32Array[srcIndexFloor] * (1 - fraction) + float32Array[srcIndexCeil] * fraction;
+          }
+        }
+        
+        if (this.packetsRecvCount <= 5) {
+          console.log(`[Voice Gateway] Upsampled audio: ${SAMPLE_RATE}Hz -> ${bufferSampleRate}Hz (${float32Array.length} -> ${finalAudioData.length} samples)`);
+        }
+      } else {
+        finalAudioData = float32Array;
       }
+      
+      // Create audio buffer with AudioContext sample rate
+      const buffer = this.audioContext.createBuffer(1, finalAudioData.length, bufferSampleRate);
+      buffer.copyToChannel(finalAudioData, 0);
 
       // Create source and schedule
       // All playback sources connect to playbackGain ONLY (not directly to destination)
