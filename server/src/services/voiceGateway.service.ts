@@ -464,10 +464,17 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       // CRITICAL: ALWAYS log first 100 relay attempts to diagnose why packets aren't being relayed
       // CRITICAL: Verify packet is a Buffer before sending
       if (!Buffer.isBuffer(packetWithSender)) {
+        // Store values before type narrowing to avoid TypeScript 'never' type issues
         const packetType = typeof packetWithSender;
-        const packetConstructor = (packetWithSender && typeof packetWithSender === 'object' && packetWithSender.constructor) 
-          ? packetWithSender.constructor.name 
-          : 'unknown';
+        let packetConstructor = 'unknown';
+        try {
+          if (packetWithSender && typeof packetWithSender === 'object') {
+            const packetObj = packetWithSender as any;
+            packetConstructor = packetObj.constructor?.name || 'unknown';
+          }
+        } catch (e) {
+          // Ignore errors when accessing constructor
+        }
         console.error(`[Voice Gateway] ❌ CRITICAL: packetWithSender is not a Buffer! Type: ${packetType}, constructor: ${packetConstructor}`);
         return;
       }
