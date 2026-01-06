@@ -680,6 +680,23 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
             timestamp: Date.now(),
           }));
           console.log(`[Voice Gateway] Sent connection confirmation to ${userId} for call ${normalizedCallId}`);
+          
+          // CRITICAL TEST: Send a test binary packet to verify binary transmission works
+          // This will help diagnose if binary packets can be received at all
+          const testPacket = Buffer.alloc(676, 0); // Same size as audio packets
+          testPacket.writeUInt32LE(999999, 0); // Special seq number for test
+          try {
+            const testSendResult = ws.send(testPacket, (error?: Error) => {
+              if (error) {
+                console.error(`[Voice Gateway] ❌ Test binary packet send failed for ${userId}:`, error.message);
+              } else {
+                console.log(`[Voice Gateway] ✅ Test binary packet sent successfully to ${userId} (this proves binary transmission works)`);
+              }
+            });
+            console.log(`[Voice Gateway] 📤 Test binary packet send() called for ${userId}, result: ${testSendResult}`);
+          } catch (testError: any) {
+            console.error(`[Voice Gateway] ❌ Error sending test binary packet to ${userId}:`, testError.message);
+          }
         }
       } catch (error: any) {
         console.error(`[Voice Gateway] Error sending connection confirmation:`, error.message);
