@@ -457,8 +457,8 @@ export class AudioCommunicationService {
       }
       
       // DIAGNOSTIC: Log mute state with comprehensive details
-      console.log(`[Audio Communication] 🎤 Microphone ${this.currentState.isMuted ? 'MUTED' : 'UNMUTED'}`);
-      console.log(`[Audio Communication] 📊 Mute state: micMuted=${this.currentState.isMuted}, audioCtx.state=${this.audioContext?.state || 'null'}, micTrack.enabled=${this.micTrack?.enabled ?? 'null'}, micTrack.readyState=${this.micTrack?.readyState || 'null'}, micTrack.muted=${this.micTrack?.muted ?? 'null'}`);
+      console.log(`[Audio Communication] 🎤🎤🎤 Microphone ${this.currentState.isMuted ? 'MUTED' : 'UNMUTED'} 🎤🎤🎤`);
+      console.log(`[Audio Communication] 📊 Mute state AFTER toggle: micMuted=${this.currentState.isMuted}, audioCtx.state=${this.audioContext?.state || 'null'}, micTrack.enabled=${this.micTrack?.enabled ?? 'null'}, micTrack.readyState=${this.micTrack?.readyState || 'null'}, micTrack.muted=${this.micTrack?.muted ?? 'null'}`);
       
       // On unmute, ALWAYS ensure audio context is running
       if (!this.currentState.isMuted && this.audioContext) {
@@ -473,6 +473,10 @@ export class AudioCommunicationService {
       // Also update Voice Gateway mic mute state (for boolean gate in sendAudioPacket)
       // CRITICAL: Use setMicMuted() instead of toggleMicMute() to avoid double-toggle
       await this.voiceGatewayService.setMicMuted(this.currentState.isMuted);
+      
+      // CRITICAL: Verify the state was actually set
+      const gatewayMuteState = this.voiceGatewayService.getMicMutedState();
+      console.log(`[Audio Communication] 📊 Verification: local isMuted=${this.currentState.isMuted}, gateway isMicMuted=${gatewayMuteState}, match=${this.currentState.isMuted === gatewayMuteState}`);
     } catch (error: any) {
       console.error('[Audio Communication] Toggle mute error:', error);
       this.errorSubject.next(error.message || 'Failed to toggle mute');
