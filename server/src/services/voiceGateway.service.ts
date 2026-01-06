@@ -227,7 +227,14 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     }
 
     const roomSize = rooms.get(normalizedCallId)!.size;
-    console.log(`[Voice Gateway] User ${userId} joined call ${normalizedCallId} (${roomSize} participant${roomSize !== 1 ? 's' : ''})`);
+    console.log(`[Voice Gateway] ✅✅✅ User ${userId} joined call ${normalizedCallId} (${roomSize} participant${roomSize !== 1 ? 's' : ''})`);
+    
+    // CRITICAL: Log all participants in room for debugging
+    const allParticipants = Array.from(rooms.get(normalizedCallId)!).map(ws => {
+      const c = connections.get(ws);
+      return c ? `${c.userId}(readyState=${ws.readyState})` : 'unknown';
+    }).filter(Boolean);
+    console.log(`[Voice Gateway] 📋 Room ${normalizedCallId} participants: [${allParticipants.join(', ')}]`);
     
     // INSTRUMENTATION: Log room participants to verify both users in same callId
     const participants = Array.from(rooms.get(normalizedCallId)!).map(roomWs => {
