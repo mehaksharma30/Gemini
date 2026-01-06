@@ -693,6 +693,27 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
             console.log(`[Voice Gateway] Room ${conn.callId} closed (no participants)`);
           } else {
             console.log(`[Voice Gateway] Room ${conn.callId} now has ${room.size} participant${room.size !== 1 ? 's' : ''}`);
+            
+            // CRITICAL: Notify remaining participants that someone left
+            const remainingParticipants = Array.from(room).map(ws => {
+              const c = connections.get(ws);
+              return c ? c.userId : null;
+            }).filter(Boolean) as string[];
+            
+            room.forEach((otherWs) => {
+              if (otherWs !== ws && otherWs.readyState === WebSocket.OPEN) {
+                try {
+                  otherWs.send(JSON.stringify({
+                    type: 'room_status',
+                    callId: conn.callId,
+                    participants: remainingParticipants,
+                    left: conn.userId
+                  }));
+                } catch (error: any) {
+                  console.error(`[Voice Gateway] Error sending room status on disconnect:`, error.message);
+                }
+              }
+            });
           }
         }
         
