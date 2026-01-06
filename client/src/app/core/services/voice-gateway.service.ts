@@ -1011,6 +1011,9 @@ export class VoiceGatewayService {
       // CRITICAL: Upsample from 16kHz to AudioContext sample rate (usually 48kHz)
       // If we don't upsample, audio will play at wrong speed (3x too fast if 48kHz)
       const bufferSampleRate = this.audioContext.sampleRate;
+      
+      // CRITICAL: Always create a new Float32Array to ensure ArrayBuffer backing (not SharedArrayBuffer)
+      // This fixes TypeScript error: Float32Array<ArrayBufferLike> not assignable to Float32Array<ArrayBuffer>
       let finalAudioData: Float32Array;
       
       if (bufferSampleRate !== SAMPLE_RATE) {
@@ -1038,15 +1041,19 @@ export class VoiceGatewayService {
           console.log(`[Voice Gateway] Upsampled audio: ${SAMPLE_RATE}Hz -> ${bufferSampleRate}Hz (${float32Array.length} -> ${finalAudioData.length} samples)`);
         }
       } else {
-        // CRITICAL: Ensure finalAudioData is backed by ArrayBuffer, not SharedArrayBuffer
-        // Create a new Float32Array to guarantee ArrayBuffer backing
+        // CRITICAL: Create new Float32Array to ensure ArrayBuffer backing (not SharedArrayBuffer)
+        // Copy data from potentially SharedArrayBuffer-backed array to ArrayBuffer-backed array
         finalAudioData = new Float32Array(float32Array.length);
-        finalAudioData.set(float32Array);
+        for (let i = 0; i < float32Array.length; i++) {
+          finalAudioData[i] = float32Array[i];
+        }
       }
       
       // Create audio buffer with AudioContext sample rate
       const buffer = this.audioContext.createBuffer(1, finalAudioData.length, bufferSampleRate);
-      buffer.copyToChannel(finalAudioData, 0);
+      // CRITICAL: Type assertion to ensure TypeScript knows this is ArrayBuffer-backed
+      // We've already ensured finalAudioData is a new Float32Array, so it's guaranteed to be ArrayBuffer-backed
+      buffer.copyToChannel(finalAudioData as Float32Array<ArrayBuffer>, 0);
 
       // Create source and schedule
       // All playback sources connect to playbackGain ONLY (not directly to destination)
