@@ -77,6 +77,8 @@ export class VoiceGatewayService {
   
   // Stats for logging (once per second)
   private packetsRecvCount: number = 0;
+  private lastPacketRecvTime: number = 0; // Track when last packet was received
+  private hasOtherParticipant: boolean = true; // Track if we know there's another participant
   private packetsSentCount: number = 0;
   private packetsPlayedCount: number = 0;
   private lastLogTime: number = 0;
@@ -340,12 +342,19 @@ export class VoiceGatewayService {
                   console.error(`[Voice Gateway] ⚠️ WARNING: Server userId (${msg.userId}) doesn't match local userId (${this.userId})!`);
                 }
               } else if (msg.type === 'room_status') {
-                console.log(`[Voice Gateway] 📊 Room status: callId=${msg.callId}, roomSize=${msg.roomSize}, participants: [${msg.participants?.join(', ') || 'none'}]`);
-                // CRITICAL: Verify we're in the right room
-                if (msg.roomSize < 2) {
-                  console.warn(`[Voice Gateway] ⚠️ WARNING: Room has only ${msg.roomSize} participant(s) - no other user in call!`);
+                const roomSize = msg.participants?.length || msg.roomSize || 0;
+                const leftUserId = msg.left;
+                console.log(`[Voice Gateway] 📊 Room status: callId=${msg.callId}, roomSize=${roomSize}, participants: [${msg.participants?.join(', ') || 'none'}], left=${leftUserId || 'none'}`);
+                
+                // CRITICAL: If someone left and we're the only one left, stop sending packets
+                if (leftUserId && roomSize < 2) {
+                  console.warn(`[Voice Gateway] ⚠️⚠️⚠️ Other user (${leftUserId}) left the call! Room now has only ${roomSize} participant(s). Stopping audio send.`);
+                  // Don't disconnect, just stop sending - they might reconnect
+                  // The audio capture will continue but packets won't be sent (gateway will block)
+                } else if (roomSize < 2) {
+                  console.warn(`[Voice Gateway] ⚠️ WARNING: Room has only ${roomSize} participant(s) - no other user in call!`);
                 } else {
-                  console.log(`[Voice Gateway] ✅ Room has ${msg.roomSize} participants - ready for audio relay`);
+                  console.log(`[Voice Gateway] ✅ Room has ${roomSize} participants - ready for audio relay`);
                 }
               } else {
                 console.log('[Voice Gateway] Received text message:', msg);
