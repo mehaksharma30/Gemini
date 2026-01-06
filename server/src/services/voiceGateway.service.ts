@@ -318,23 +318,41 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         return;
       }
 
-      // Validate packet size: header (12 bytes) + payload (640 bytes) = 652 bytes
-      if (!buffer || buffer.length !== 652) {
-        console.warn(`[Voice Gateway] Invalid packet size: ${buffer?.length || 'undefined'} bytes (expected 652)`);
+      // CRITICAL: Accept BOTH packet formats:
+      // - Old format: 652 bytes (seq + timestamp + payload)
+      // - New format: 676 bytes (seq + timestamp + senderId + payload)
+      const PACKET_SIZE_OLD = 652;
+      const PACKET_SIZE_NEW = 676;
+      
+      if (!buffer || (buffer.length !== PACKET_SIZE_OLD && buffer.length !== PACKET_SIZE_NEW)) {
+        console.warn(`[Voice Gateway] Invalid packet size: ${buffer?.length || 'undefined'} bytes (expected ${PACKET_SIZE_OLD} or ${PACKET_SIZE_NEW})`);
         return;
       }
 
-      // CRITICAL: Add senderId to packet to prevent loopback on client side
-      // Packet format: seq (4) + timestamp (8) + senderId (24) + payload (640) = 676 bytes
-      // Convert existing packet to new format with senderId
+      // CRITICAL: Handle both packet formats
+      let packetWithSender: Buffer;
       const senderId = conn.userId;
-      const senderIdBytes = Buffer.from(senderId.padEnd(24, '\0').slice(0, 24), 'utf8'); // Fixed 24 bytes
       
-      // Create new packet with senderId
-      const packetWithSender = Buffer.alloc(676);
-      buffer.copy(packetWithSender, 0, 0, 12); // Copy seq + timestamp (12 bytes)
-      senderIdBytes.copy(packetWithSender, 12, 0, 24); // Add senderId (24 bytes)
-      buffer.copy(packetWithSender, 36, 12, 652); // Copy payload (640 bytes)
+      if (buffer.length === PACKET_SIZE_NEW) {
+        // Client already sent new format with senderId - use it directly
+        packetWithSender = buffer;
+        if (conn.packetsReceived <= 10) {
+          console.log(`[Voice Gateway] Received new format packet (676 bytes) from ${conn.userId}`);
+        }
+      } else {
+        // Old format (652 bytes) - convert to new format by adding senderId
+        const senderIdBytes = Buffer.from(senderId.padEnd(24, '\0').slice(0, 24), 'utf8'); // Fixed 24 bytes
+        
+        // Create new packet with senderId
+        packetWithSender = Buffer.alloc(PACKET_SIZE_NEW);
+        buffer.copy(packetWithSender, 0, 0, 12); // Copy seq + timestamp (12 bytes)
+        senderIdBytes.copy(packetWithSender, 12, 0, 24); // Add senderId (24 bytes)
+        buffer.copy(packetWithSender, 36, 12, PACKET_SIZE_OLD); // Copy payload (640 bytes)
+        
+        if (conn.packetsReceived <= 10) {
+          console.log(`[Voice Gateway] Converted old format packet (652 bytes) to new format (676 bytes) for ${conn.userId}`);
+        }
+      }
 
       // Relay to all other connections in the same room
       // CRITICAL: Exclude sender (ws) to prevent loopback
