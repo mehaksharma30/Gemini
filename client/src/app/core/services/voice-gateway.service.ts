@@ -1038,7 +1038,10 @@ export class VoiceGatewayService {
           console.log(`[Voice Gateway] Upsampled audio: ${SAMPLE_RATE}Hz -> ${bufferSampleRate}Hz (${float32Array.length} -> ${finalAudioData.length} samples)`);
         }
       } else {
-        finalAudioData = float32Array;
+        // CRITICAL: Ensure finalAudioData is backed by ArrayBuffer, not SharedArrayBuffer
+        // Create a new Float32Array to guarantee ArrayBuffer backing
+        finalAudioData = new Float32Array(float32Array.length);
+        finalAudioData.set(float32Array);
       }
       
       // Create audio buffer with AudioContext sample rate
