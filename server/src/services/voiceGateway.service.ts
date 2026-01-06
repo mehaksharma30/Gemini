@@ -168,10 +168,20 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
 
     console.log(`[Voice Gateway] ✅ New connection: userId=${userId}, callId=${callId}`);
     console.log(`[Voice Gateway] 📊 Connection details: origin=${req.headers.origin || 'none'}, path=${pathname}, fullURL=${req.url}`);
+    console.log(`[Voice Gateway] 🔍 Raw callId length: ${callId?.length || 0}, userId length: ${userId?.length || 0}`);
 
     // CRITICAL FIX: Normalize callId FIRST before storing connection metadata
     // This ensures consistency between connection metadata and room lookup
-    const normalizedCallId = callId.trim();
+    // CRITICAL: Also decode URL encoding to handle special characters
+    let normalizedCallId = callId.trim();
+    try {
+      // Decode URL encoding (e.g., %2D becomes -)
+      normalizedCallId = decodeURIComponent(normalizedCallId);
+    } catch (e) {
+      // If decoding fails, use trimmed version
+      console.warn(`[Voice Gateway] ⚠️ Failed to decode callId, using trimmed version: ${normalizedCallId}`);
+    }
+    console.log(`[Voice Gateway] 🔍 Normalized callId: "${normalizedCallId}" (length=${normalizedCallId.length})`);
     
     // Store connection metadata with NORMALIZED callId
     const connId = `${userId}-${Date.now()}`;
@@ -232,16 +242,51 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     // CRITICAL: Log all participants in room for debugging
     const allParticipants = Array.from(rooms.get(normalizedCallId)!).map(ws => {
       const c = connections.get(ws);
-      return c ? `${c.userId}(readyState=${ws.readyState})` : 'unknown';
+      return c ? `${c.userId}(readyState=${ws.readyState}, callId="${c.callId}")` : 'unknown';
     }).filter(Boolean);
     console.log(`[Voice Gateway] 📋 Room ${normalizedCallId} participants: [${allParticipants.join(', ')}]`);
+    
+    // CRITICAL: Log ALL rooms to diagnose why second user isn't joining
+    console.log(`[Voice Gateway] 🔍 ALL ROOMS ON SERVER:`, Array.from(rooms.entries()).map(([id, roomSet]) => {
+      const roomParticipants = Array.from(roomSet).map(rws => {
+        const rc = connections.get(rws);
+        return rc ? `${rc.userId}(callId="${rc.callId}")` : 'unknown';
+      }).filter(Boolean);
+      return `\n  - Room "${id}" (${roomSet.size} participants): [${roomParticipants.join(', ')}]`;
+    }).join(''));
     
     // CRITICAL: If room has 2 participants, log success
     if (roomSize === 2) {
       console.log(`[Voice Gateway] 🎉🎉🎉 SUCCESS: Room ${normalizedCallId} now has 2 participants - ready for two-way communication!`);
       console.log(`[Voice Gateway] 🎉 Participants: [${allParticipants.join(', ')}]`);
+      
+      // CRITICAL: Send room_status to BOTH participants to confirm they're in the same room
+      const roomStatusMessage = JSON.stringify({
+        type: 'room_status',
+        callId: normalizedCallId,
+        roomSize: 2,
+        participants: allParticipants.map(p => {
+          const match = p.match(/^([^(]+)/);
+          return match ? match[1] : p;
+        }),
+        ready: true
+      });
+      
+      rooms.get(normalizedCallId)!.forEach(roomWs => {
+        if (roomWs.readyState === WebSocket.OPEN) {
+          try {
+            roomWs.send(roomStatusMessage);
+            console.log(`[Voice Gateway] ✅ Sent room_status (ready=true) to participant`);
+          } catch (error: any) {
+            console.error(`[Voice Gateway] Error sending room_status:`, error.message);
+          }
+        }
+      });
     } else if (roomSize === 1) {
       console.warn(`[Voice Gateway] ⚠️ WARNING: Room ${normalizedCallId} has only 1 participant (${userId}). Waiting for second user to join...`);
+      console.warn(`[Voice Gateway] ⚠️ Expected callId format: <userId1>-<userId2> (sorted user IDs)`);
+      console.warn(`[Voice Gateway] ⚠️ Current callId: "${normalizedCallId}"`);
+      console.warn(`[Voice Gateway] ⚠️ Current userId: "${userId}"`);
     }
     
     // INSTRUMENTATION: Log room participants to verify both users in same callId
@@ -709,28 +754,37 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         const reasonStr = reason && reason.length > 0 ? reason.toString() : 'none';
         console.log(`[Voice Gateway] ❌❌❌ User ${conn.userId} disconnected from call ${conn.callId} (code: ${code}, reason: ${reasonStr})`);
         
+        // CRITICAL: Log room state BEFORE removing this connection
+        const roomBefore = rooms.get(conn.callId);
+        const roomSizeBefore = roomBefore ? roomBefore.size : 0;
+        console.log(`[Voice Gateway] 📊 Room state BEFORE disconnect: callId=${conn.callId}, roomSize=${roomSizeBefore}`);
+        
         // Remove from room
         const room = rooms.get(conn.callId);
         if (room) {
           room.delete(ws);
+          const roomSizeAfter = room.size;
           if (room.size === 0) {
             rooms.delete(conn.callId);
             console.log(`[Voice Gateway] Room ${conn.callId} closed (no participants)`);
           } else {
-            console.log(`[Voice Gateway] Room ${conn.callId} now has ${room.size} participant${room.size !== 1 ? 's' : ''}`);
+            console.log(`[Voice Gateway] Room ${conn.callId} now has ${roomSizeAfter} participant${roomSizeAfter !== 1 ? 's' : ''} (was ${roomSizeBefore})`);
             
-            // CRITICAL: Notify remaining participants that someone left
-            const remainingParticipants = Array.from(room).map(ws => {
-              const c = connections.get(ws);
+            // CRITICAL: Log remaining participants
+            const remainingParticipants = Array.from(room).map(roomWs => {
+              const c = connections.get(roomWs);
               return c ? c.userId : null;
             }).filter(Boolean) as string[];
+            console.log(`[Voice Gateway] 📋 Remaining participants: [${remainingParticipants.join(', ')}]`);
             
+            // CRITICAL: Notify remaining participants that someone left
             room.forEach((otherWs) => {
               if (otherWs !== ws && otherWs.readyState === WebSocket.OPEN) {
                 try {
                   otherWs.send(JSON.stringify({
                     type: 'room_status',
                     callId: conn.callId,
+                    roomSize: roomSizeAfter,
                     participants: remainingParticipants,
                     left: conn.userId
                   }));
@@ -740,9 +794,13 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
               }
             });
           }
+        } else {
+          console.warn(`[Voice Gateway] ⚠️ WARNING: No room found for callId ${conn.callId} when disconnecting ${conn.userId}`);
         }
         
         connections.delete(ws);
+      } else {
+        console.warn(`[Voice Gateway] ⚠️ WARNING: Connection closed but no metadata found (code: ${code})`);
       }
     });
 

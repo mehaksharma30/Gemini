@@ -67,6 +67,7 @@ export class VoiceGatewayService {
   private playbackGain: GainNode | null = null; // Dedicated gain node for remote audio playback (speaker mute/unmute)
   
   // Mute states
+  // CRITICAL: Default to UNMUTED to ensure audio is sent by default
   private isMicMuted: boolean = false;
   private isSpeakerMuted: boolean = false;
   
@@ -170,6 +171,11 @@ export class VoiceGatewayService {
     this.packetsSentCount = 0;
     this.packetsRecvCount = 0;
     this.packetsPlayedCount = 0;
+    
+    // CRITICAL: Ensure mic is UNMUTED by default when connecting
+    // This prevents "micMuted=true" from blocking audio transmission
+    this.isMicMuted = false;
+    console.log(`[Voice Gateway] 🔧 Mic state reset to UNMUTED on connect (callId: ${callId}, userId: ${userId})`);
 
     return this.attemptConnection();
   }
@@ -186,10 +192,14 @@ export class VoiceGatewayService {
         // CRITICAL: Normalize callId (trim whitespace) to prevent mismatches
         const normalizedCallId = this.callId.trim();
         const normalizedUserId = this.userId.trim();
-        const url = `${baseUrl}/?callId=${encodeURIComponent(normalizedCallId)}&userId=${encodeURIComponent(normalizedUserId)}`;
+        // CRITICAL: Use encodeURIComponent to handle special characters in callId/userId
+        const encodedCallId = encodeURIComponent(normalizedCallId);
+        const encodedUserId = encodeURIComponent(normalizedUserId);
+        const url = `${baseUrl}/?callId=${encodedCallId}&userId=${encodedUserId}`;
         
         console.log(`[Voice Gateway] 🔌 Connecting to: ${url}`);
-        console.log(`[Voice Gateway] 📊 Connection params: callId="${normalizedCallId}" (length=${normalizedCallId.length}), userId="${normalizedUserId}" (length=${normalizedUserId.length})`);
+        console.log(`[Voice Gateway] 📊 Connection params: callId="${normalizedCallId}" (length=${normalizedCallId.length}, encoded length=${encodedCallId.length}), userId="${normalizedUserId}" (length=${normalizedUserId.length}, encoded length=${encodedUserId.length})`);
+        console.log(`[Voice Gateway] 🔍 Full URL breakdown: baseUrl="${baseUrl}", callId="${normalizedCallId}", userId="${normalizedUserId}"`);
         
         // CRITICAL: Verify callId and userId are not empty
         if (!normalizedCallId || normalizedCallId.length === 0) {

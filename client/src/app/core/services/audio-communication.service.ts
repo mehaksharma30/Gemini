@@ -109,8 +109,17 @@ export class AudioCommunicationService {
       this.targetUserId = targetUserId;
       
       // Create call ID (sorted to ensure consistency)
-      this.callId = [userId, targetUserId].sort().join('-');
-      console.log('[Audio Communication] Initializing for call:', this.callId);
+      // CRITICAL: Sort user IDs to ensure both users generate the SAME callId
+      // This is essential for both users to join the same room
+      const sortedUserIds = [userId, targetUserId].sort();
+      this.callId = sortedUserIds.join('-');
+      console.log('[Audio Communication] 🔄 Initializing for group:', this.callId);
+      console.log('[Audio Communication] 📊 User IDs: userId=', userId, ', targetUserId=', targetUserId, ', sorted=', sortedUserIds);
+
+      // CRITICAL: Ensure mic is UNMUTED before connecting
+      // This prevents "micMuted=true" from blocking audio transmission
+      await this.voiceGatewayService.setMicMuted(false);
+      console.log('[Audio Communication] 🔧 Mic state set to UNMUTED before connection');
 
       // Connect to Voice Gateway
       await this.voiceGatewayService.connect(this.callId, userId);
