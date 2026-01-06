@@ -682,7 +682,8 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     ws.on('close', (code: number, reason: Buffer) => {
       const conn = connections.get(ws);
       if (conn) {
-        console.log(`[Voice Gateway] User ${conn.userId} disconnected from call ${conn.callId} (code: ${code})`);
+        const reasonStr = reason && reason.length > 0 ? reason.toString() : 'none';
+        console.log(`[Voice Gateway] ❌❌❌ User ${conn.userId} disconnected from call ${conn.callId} (code: ${code}, reason: ${reasonStr})`);
         
         // Remove from room
         const room = rooms.get(conn.callId);
@@ -767,7 +768,7 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     wss.clients.forEach((ws) => {
       if ((ws as any).isAlive === false) {
         const conn = connections.get(ws);
-        console.log(`[Voice Gateway] Terminating inactive connection: ${conn?.userId || 'unknown'}`);
+        console.log(`[Voice Gateway] ⚠️⚠️⚠️ Terminating inactive connection (no pong response): ${conn?.userId || 'unknown'}, callId: ${conn?.callId || 'unknown'}`);
         return ws.terminate();
       }
       (ws as any).isAlive = false;
