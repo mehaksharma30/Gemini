@@ -185,27 +185,46 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       lastStatsLog: Date.now(),
     });
     
-    // Join room
-    if (!rooms.has(normalizedCallId)) {
-      rooms.set(normalizedCallId, new Set());
-      console.log(`[Voice Gateway] Created new room: callId=${normalizedCallId}`);
-    }
-    
-    // CRITICAL FIX: Check if this WebSocket is already in a room and remove it first
+    // CRITICAL FIX: Check if this WebSocket is already in ANY room and remove it first
+    // This must happen BEFORE checking/creating the new room to prevent duplicate entries
     for (const [existingCallId, roomSet] of rooms.entries()) {
       if (roomSet.has(ws)) {
         roomSet.delete(ws);
-        console.log(`[Voice Gateway] Removed ${userId} from previous room ${existingCallId}`);
+        console.log(`[Voice Gateway] Removed ${userId} from previous room ${existingCallId} (roomSize now=${roomSet.size})`);
         if (roomSet.size === 0) {
           rooms.delete(existingCallId);
+          console.log(`[Voice Gateway] Deleted empty room: ${existingCallId}`);
         }
         break;
       }
     }
     
+    // CRITICAL: Join room - create if doesn't exist, otherwise add to existing
+    // This ensures both users end up in the SAME room
+    const roomExisted = rooms.has(normalizedCallId);
+    if (!roomExisted) {
+      rooms.set(normalizedCallId, new Set());
+      console.log(`[Voice Gateway] ✅ Created NEW room: callId=${normalizedCallId}`);
+    } else {
+      const existingRoom = rooms.get(normalizedCallId)!;
+      const existingRoomSize = existingRoom.size;
+      const existingParticipants = Array.from(existingRoom).map(rws => {
+        const rc = connections.get(rws);
+        return rc ? rc.userId : 'unknown';
+      }).filter(Boolean);
+      console.log(`[Voice Gateway] ✅ Joining EXISTING room: callId=${normalizedCallId}, current participants=${existingRoomSize} [${existingParticipants.join(', ')}]`);
+    }
+    
     // Connection metadata already has normalized callId (set above)
     
-    rooms.get(normalizedCallId)!.add(ws);
+    // CRITICAL: Add this WebSocket to the room
+    const targetRoom = rooms.get(normalizedCallId)!;
+    if (!targetRoom.has(ws)) {
+      targetRoom.add(ws);
+      console.log(`[Voice Gateway] ✅ Added ${userId} to room ${normalizedCallId}`);
+    } else {
+      console.warn(`[Voice Gateway] ⚠️ WebSocket ${userId} already in room ${normalizedCallId} (should not happen)`);
+    }
 
     const roomSize = rooms.get(normalizedCallId)!.size;
     console.log(`[Voice Gateway] User ${userId} joined call ${normalizedCallId} (${roomSize} participant${roomSize !== 1 ? 's' : ''})`);
