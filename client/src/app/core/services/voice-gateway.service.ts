@@ -14,7 +14,7 @@ const SENDER_ID_SIZE = 24; // Fixed 24 bytes for senderId
 // Jitter buffer settings
 const MIN_BUFFER_PACKETS = 25; // ~500ms buffer before starting playback
 const MAX_BUFFER_PACKETS = 50; // ~1000ms max buffer
-const LOW_BUFFER_THRESHOLD = 12; // Pause scheduling if buffer drops below this (but don't reset state)
+const LOW_BUFFER_THRESHOLD = 5; // Pause scheduling if buffer drops below this (but don't reset state) - lowered from 12 to prevent premature pausing
 
 // Voice Gateway WebSocket URL (from environment)
 const GATEWAY_URL = environment.voiceGatewayUrl;
@@ -915,18 +915,20 @@ export class VoiceGatewayService {
 
     // Check if we should pause scheduling due to low buffer (but keep playback state intact)
     // NEVER set isPlaying=false or reset nextPlayTime/nextPlaybackSeq
-    if (this.isPlaying && this.jitterBuffer.size < LOW_BUFFER_THRESHOLD) {
+    // CRITICAL: Only pause if buffer is critically low (< 3 packets) to prevent audio gaps
+    if (this.isPlaying && this.jitterBuffer.size < 3) {
       if (!this.isSchedulingPaused) {
         // Pause scheduling but keep all state intact
         this.isSchedulingPaused = true;
-        console.log(`[Voice Gateway] Scheduling paused (low buffer: ${this.jitterBuffer.size} packets) - state preserved`);
+        console.warn(`[Voice Gateway] ⚠️ Scheduling paused (critically low buffer: ${this.jitterBuffer.size} < 3 packets) - state preserved`);
       }
-      return; // Don't schedule new packets, but don't reset anything
+      // Don't return - continue to try scheduling if packets are available
     }
     
     // Check if we should resume scheduling if buffer refilled
     // Do NOT reset nextPlayTime or nextPlaybackSeq - continue from where we left off
-    if (this.isPlaying && this.isSchedulingPaused && this.jitterBuffer.size >= LOW_BUFFER_THRESHOLD) {
+    // CRITICAL: Resume when buffer has at least 5 packets (was 12, too high)
+    if (this.isPlaying && this.isSchedulingPaused && this.jitterBuffer.size >= 5) {
       this.isSchedulingPaused = false;
       // Find the next available seq >= nextPlaybackSeq (don't reset to start)
       const seqs = Array.from(this.jitterBuffer.keys()).sort((a, b) => a - b);
@@ -941,7 +943,7 @@ export class VoiceGatewayService {
           this.nextPlayTime = now + 0.05; // Small forward adjustment
         }
       }
-      console.log(`[Voice Gateway] Scheduling resumed from seq ${this.nextPlaybackSeq} (buffer: ${this.jitterBuffer.size} packets, speakerMuted=${this.isSpeakerMuted})`);
+      console.log(`[Voice Gateway] ✅ Scheduling resumed from seq ${this.nextPlaybackSeq} (buffer: ${this.jitterBuffer.size} packets, speakerMuted=${this.isSpeakerMuted})`);
     }
 
     // Limit buffer size (remove oldest if too large)
@@ -957,8 +959,14 @@ export class VoiceGatewayService {
    * IMPORTANT: Only schedules if not paused due to low buffer
    */
   private scheduleNextPacket(): void {
-    if (!this.audioContext || !this.isPlaying || this.isSchedulingPaused || this.nextPlaybackSeq === null || !this.playbackGain) {
+    if (!this.audioContext || !this.isPlaying || this.nextPlaybackSeq === null || !this.playbackGain) {
       return;
+    }
+    
+    // CRITICAL: Even if scheduling is paused, continue scheduling if we have packets available
+    // Only skip if buffer is critically low (< 3 packets) to prevent audio gaps
+    if (this.isSchedulingPaused && this.jitterBuffer.size < 3) {
+      return; // Buffer too low, wait for more packets
     }
 
     const now = this.audioContext.currentTime;
