@@ -1153,6 +1153,13 @@ export class VoiceGatewayService {
     }
     this.lastLogTime = now;
     
+    // CRITICAL: Detect if packets stopped being received (connection might be dead)
+    const timeSinceLastPacket = this.lastPacketRecvTime > 0 ? now - this.lastPacketRecvTime : 0;
+    if (timeSinceLastPacket > 3000 && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      console.warn(`[Voice Gateway] ⚠️⚠️⚠️ No packets received for ${Math.floor(timeSinceLastPacket / 1000)} seconds! WebSocket appears open (readyState=${this.ws.readyState}) but no data. Connection might be dead.`);
+      console.warn(`[Voice Gateway] ⚠️ hasOtherParticipant=${this.hasOtherParticipant}, packetsRecvCount=${this.packetsRecvCount}`);
+    }
+    
     const audioCtxState = this.audioContext ? this.audioContext.state : 'null';
     
     // Calculate scheduledAheadMs (how far ahead we're scheduling)
