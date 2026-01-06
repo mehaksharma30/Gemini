@@ -428,6 +428,14 @@ export class VoiceGatewayService {
             }
             
             if (arrayBuffer && byteLength > 0) {
+              // CRITICAL: Check if this is the test binary packet (seq=999999)
+              const testSeq = new DataView(arrayBuffer).getUInt32(0, true);
+              if (testSeq === 999999) {
+                console.log(`[Voice Gateway] ✅✅✅ TEST BINARY PACKET RECEIVED! This proves binary transmission works! byteLength=${byteLength}`);
+                // Don't process test packet, just acknowledge receipt
+                return;
+              }
+              
               // INSTRUMENTATION: Increment packetsRecvCount for ANY binary data (even before parsing)
               // This ensures recv/sec reflects reality of what arrives at client
               this.packetsRecvCount++;
