@@ -53,13 +53,17 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       const xForwardedFor = info.req.headers['x-forwarded-for'] || 'none';
       const xForwardedProto = info.req.headers['x-forwarded-proto'] || 'none';
       
-      console.log(`[Voice Gateway] 🔄 Connection attempt from ${origin}`);
-      console.log(`[Voice Gateway] Path: ${pathname}, Full URL: ${info.req.url}`);
-      console.log(`[Voice Gateway] Host: ${host}, Secure: ${info.secure}`);
-      console.log(`[Voice Gateway] X-Forwarded-For: ${xForwardedFor}, X-Forwarded-Proto: ${xForwardedProto}`);
+      console.log(`[Voice Gateway] 🔄🔍 CONNECTION ATTEMPT - ${new Date().toISOString()}`);
+      console.log(`[Voice Gateway] Origin: ${origin}`);
+      console.log(`[Voice Gateway] Path: ${pathname}`);
+      console.log(`[Voice Gateway] Full URL: ${info.req.url}`);
+      console.log(`[Voice Gateway] Host: ${host}`);
+      console.log(`[Voice Gateway] Secure: ${info.secure}`);
+      console.log(`[Voice Gateway] X-Forwarded-For: ${xForwardedFor}`);
+      console.log(`[Voice Gateway] X-Forwarded-Proto: ${xForwardedProto}`);
       console.log(`[Voice Gateway] Upgrade header: ${info.req.headers.upgrade}`);
       console.log(`[Voice Gateway] Connection header: ${info.req.headers.connection}`);
-      console.log(`[Voice Gateway] User-Agent: ${userAgent.substring(0, 100)}`);
+      console.log(`[Voice Gateway] User-Agent: ${userAgent}`);
       
       // Accept both /voice-gateway and /vo_* paths (for backward compatibility and different client implementations)
       const isVoiceGatewayPath = pathname === '/voice-gateway' || pathname === '/voice-gateway/';
@@ -71,14 +75,30 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         return false;
       }
       
-      // Verify origin (for production security)
-      // In production, origin should match allowed origins
-      // In development, allow all origins for easier testing
+      // CRITICAL FIX: Detect watchOS/iOS clients and allow them
+      // WatchOS and iOS WebSocket clients often don't send proper origin headers
+      const isWatchOS = userAgent.includes('Watch') || userAgent.includes('watchOS');
+      const isIOS = userAgent.includes('iPhone') || userAgent.includes('iPad') || userAgent.includes('iOS');
+      const isMobile = isWatchOS || isIOS;
+      
+      // CRITICAL: Allow connections from watch/iOS even without proper origin
+      // This is safe because we verify the WebSocket handshake and validate callId/userId
+      if (isMobile) {
+        console.log(`[Voice Gateway] ✅ Allowing mobile/watch connection (User-Agent: ${userAgent.substring(0, 100)})`);
+        console.log(`[Voice Gateway] Device type: ${isWatchOS ? 'watchOS' : isIOS ? 'iOS' : 'unknown mobile'}`);
+        return true;
+      }
+      
+      // For non-mobile clients, verify origin (for production security)
       const isProduction = process.env.NODE_ENV === 'production';
       if (isProduction && origin !== 'unknown origin' && !allowedOrigins.includes(origin)) {
-        console.warn(`[Voice Gateway] ❌ Rejected connection from unauthorized origin: ${origin}`);
-        console.warn(`[Voice Gateway] Allowed origins: ${allowedOrigins.join(', ')}`);
-        return false;
+        // CRITICAL: Also allow if origin is missing/null (some clients don't send it)
+        // Only block if origin is explicitly set to a disallowed value
+        if (origin && origin !== 'null' && origin !== 'unknown origin') {
+          console.warn(`[Voice Gateway] ❌ Rejected connection from unauthorized origin: ${origin}`);
+          console.warn(`[Voice Gateway] Allowed origins: ${allowedOrigins.join(', ')}`);
+          return false;
+        }
       }
       
       console.log(`[Voice Gateway] ✅ Accepting connection to ${pathname} from ${origin}`);
