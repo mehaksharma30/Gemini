@@ -45,8 +45,20 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         }
       }
       
-      // Log connection attempts for debugging (PRODUCTION CRITICAL)
+      // CRITICAL: Check path FIRST before logging (to avoid intercepting Socket.IO)
       const pathname = info.req.url?.split('?')[0] || '';
+      
+      // CRITICAL: Allow Socket.IO paths to pass through silently (don't intercept them)
+      // Socket.IO uses /socket.io path and has its own WebSocket server
+      // Return false silently to let Socket.IO handle it (our verifyClient only handles voice-gateway)
+      const isSocketIOPath = pathname === '/socket.io' || pathname.startsWith('/socket.io/');
+      if (isSocketIOPath) {
+        // Don't log or process Socket.IO connections - let Socket.IO server handle them
+        return false;
+      }
+      
+      // Log connection attempts for debugging (PRODUCTION CRITICAL)
+      // Only log voice-gateway connections, not Socket.IO
       const origin = info.origin || 'unknown origin';
       const host = info.req.headers.host || 'unknown';
       const userAgent = info.req.headers['user-agent'] || 'unknown';
