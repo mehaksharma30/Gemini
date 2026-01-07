@@ -82,6 +82,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // Socket.IO CORS configuration
+// CRITICAL: Azure Web Apps requires specific settings for WebSocket support
 const io = new Server(httpServer, {
   cors: {
     origin: allowedOrigins,
@@ -89,8 +90,32 @@ const io = new Server(httpServer, {
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
   },
-  transports: ['websocket', 'polling'], // Explicitly allow both transports
+  transports: ['websocket', 'polling'], // CRITICAL: Allow WebSocket first, polling as fallback
   path: '/socket.io', // Explicit Socket.IO path (default, but making it explicit)
+  // Azure-specific WebSocket settings to fix "Invalid frame header" errors
+  allowUpgrades: true, // Allow polling → WebSocket upgrade
+  upgradeTimeout: 15000, // 15 seconds for Azure's slower proxy (increased for WebSocket-first)
+  pingTimeout: 60000, // 60 seconds (Azure App Service idle timeout is 4 minutes, but we use shorter)
+  pingInterval: 25000, // 25 seconds (send ping before timeout)
+  // Prioritize WebSocket - serve WebSocket upgrade immediately when available
+  serveClient: false, // Don't serve Socket.IO client files (not needed)
+  cookie: {
+    name: 'io',
+    httpOnly: true,
+    sameSite: 'lax',
+    path: '/',
+  },
+  // Connection state recovery for reconnections
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
+    skipMiddlewares: true,
+  },
+  // Increase max HTTP buffer for large messages
+  maxHttpBufferSize: 1e6, // 1MB
+  // Force WebSocket for better Azure compatibility
+  allowEIO3: true, // Allow Engine.IO v3 clients (backward compatibility)
+  // Disable per-message compression to avoid "Invalid frame header" on Azure reverse proxy
+  perMessageDeflate: false, // Azure's reverse proxy can interfere with compressed frames
 });
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

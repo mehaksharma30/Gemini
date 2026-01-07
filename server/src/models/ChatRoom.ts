@@ -40,3 +40,4 @@ const ChatRoom = mongoose.model<IChatRoom>('ChatRoom', chatRoomSchema);
 
 export default ChatRoom;
 
+
