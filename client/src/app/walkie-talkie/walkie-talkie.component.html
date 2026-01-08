@@ -46,10 +46,11 @@
           <button 
             class="play-audio-btn" 
             (click)="playAudio(message.audioUrl)"
-            [disabled]="currentAudioPlayer && !currentAudioPlayer.paused"
+            [disabled]="isAudioPlaying()"
             type="button"
           >
-            {{ currentAudioPlayer && !currentAudioPlayer.paused ? '⏸️ Playing...' : '▶️ Play Audio' }}
+            <span *ngIf="isAudioPlaying()">⏸️ Playing...</span>
+            <span *ngIf="!isAudioPlaying()">▶️ Play Audio</span>
           </button>
         </div>
       </div>
@@ -83,7 +84,7 @@
       </div>
 
       <div *ngIf="isSending" class="sending-status">
-        <span>Sending...</span>
+        <span>Sending message...</span>
       </div>
     </div>
   </div>

@@ -140,8 +140,8 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
 
     this.stopPolling();
 
-    // Poll every 1.5 seconds
-    this.pollSubscription = interval(1500).subscribe(() => {
+    // Poll every 800ms for faster updates
+    this.pollSubscription = interval(800).subscribe(() => {
       this.pollNewMessages();
     });
 
@@ -173,20 +173,29 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
         .toPromise();
 
       if (response && response.messages.length > 0) {
-        // Add new messages
-        this.messages = [...this.messages, ...response.messages];
+        // Filter out messages we already have
+        const existingMessageIds = new Set(this.messages.map(m => m.messageId));
+        const newMessages = response.messages.filter(m => !existingMessageIds.has(m.messageId));
 
-        // Update last message timestamp
-        const lastMessage = response.messages[response.messages.length - 1];
-        this.lastMessageTimestamp = lastMessage.createdAt;
+        if (newMessages.length > 0) {
+          // Add new messages
+          this.messages = [...this.messages, ...newMessages];
 
-        // Auto-play new messages from the other user
-        for (const msg of response.messages) {
-          if (msg.toUserId === this.currentUserId) {
-            // This message is for us, auto-play it (don't await - let it play in background)
-            this.playAudio(msg.audioUrl).catch(err => {
-              console.error('[WalkieTalkie] Auto-play error:', err);
-            });
+          // Update last message timestamp
+          const lastMessage = newMessages[newMessages.length - 1];
+          this.lastMessageTimestamp = lastMessage.createdAt;
+
+          // Scroll to bottom when new messages arrive
+          setTimeout(() => this.scrollToBottom(), 100);
+
+          // Auto-play new messages from the other user
+          for (const msg of newMessages) {
+            if (msg.toUserId === this.currentUserId) {
+              // This message is for us, auto-play it (don't await - let it play in background)
+              this.playAudio(msg.audioUrl).catch(err => {
+                console.error('[WalkieTalkie] Auto-play error:', err);
+              });
+            }
           }
         }
       }
@@ -321,6 +330,9 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
 
         // Update last message timestamp
         this.lastMessageTimestamp = response.createdAt;
+
+        // Scroll to bottom after sending
+        setTimeout(() => this.scrollToBottom(), 100);
 
         // Start polling if not already polling
         if (!this.pollSubscription) {
