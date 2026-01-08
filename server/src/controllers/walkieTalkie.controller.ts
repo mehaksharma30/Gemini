@@ -2,7 +2,23 @@ import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import fs from 'fs';
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import WalkieTalkieMessage from '../models/WalkieTalkieMessage';
+
+const execFileAsync = promisify(execFile);
+
+// Import ffmpeg-static (bundled binary)
+let ffmpegPath: string;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const ffmpegStatic = require('ffmpeg-static');
+  ffmpegPath = typeof ffmpegStatic === 'string' ? ffmpegStatic : (ffmpegStatic as any).default || 'ffmpeg';
+  console.log('[WalkieTalkie] ffmpeg-static loaded:', ffmpegPath);
+} catch (error) {
+  console.error('[WalkieTalkie] ffmpeg-static not found. WebM conversion will fail.');
+  ffmpegPath = 'ffmpeg'; // Fallback to system ffmpeg if available
+}
 
 // Ensure uploads directory exists on module load
 const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
@@ -29,6 +45,64 @@ function generateThreadId(userAId: string, userBId: string): string {
  */
 function generateMessageId(): string {
   return `msg_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+}
+
+/**
+ * Check if file is WebM format
+ */
+function isWebMFormat(file: Express.Multer.File): boolean {
+  const mimeType = file.mimetype?.toLowerCase() || '';
+  const ext = path.extname(file.originalname).toLowerCase();
+  return mimeType.includes('webm') || ext === '.webm';
+}
+
+/**
+ * Convert WebM audio file to M4A (AAC) format for watchOS compatibility
+ * @param inputPath Path to WebM file
+ * @param outputPath Path where M4A file should be saved
+ * @returns Promise<void>
+ */
+async function convertWebMToM4A(inputPath: string, outputPath: string): Promise<void> {
+  console.log('[WalkieTalkie] Converting WebM to M4A:', {
+    input: inputPath,
+    output: outputPath,
+  });
+
+  try {
+    // ffmpeg command: convert WebM to M4A (AAC codec)
+    // -i: input file
+    // -c:a aac: audio codec AAC
+    // -b:a 128k: audio bitrate 128kbps
+    // -ar 44100: sample rate 44.1kHz (watchOS compatible)
+    // -y: overwrite output file if exists
+    await execFileAsync(ffmpegPath, [
+      '-i', inputPath,
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-ar', '44100',
+      '-y', // Overwrite output
+      outputPath,
+    ]);
+
+    // Verify output file exists and has content
+    if (!fs.existsSync(outputPath)) {
+      throw new Error('Conversion failed: output file not created');
+    }
+
+    const stats = fs.statSync(outputPath);
+    if (stats.size === 0) {
+      throw new Error('Conversion failed: output file is empty');
+    }
+
+    console.log('[WalkieTalkie] WebM to M4A conversion successful:', {
+      inputSize: fs.statSync(inputPath).size,
+      outputSize: stats.size,
+      outputPath,
+    });
+  } catch (error: any) {
+    console.error('[WalkieTalkie] WebM to M4A conversion error:', error);
+    throw new Error(`Failed to convert WebM to M4A: ${error.message || error}`);
+  }
 }
 
 /**
@@ -111,15 +185,44 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
     // Generate message ID
     const messageId = generateMessageId();
 
-    // Store audio file path
-    const audioPath = req.file.path;
-    const audioFilename = path.basename(audioPath);
-    const audioUrl = `/api/wt/audio/${messageId}`;
+    // Store original audio file path
+    const originalPath = req.file.path;
+    let audioPath = originalPath;
+    let shouldDeleteOriginal = false;
 
-    // Verify file exists
+    // Check if file is WebM format (needs conversion for watchOS)
+    if (isWebMFormat(req.file)) {
+      console.log('[WalkieTalkie] WebM file detected, converting to M4A for watchOS compatibility');
+      
+      // Generate M4A output path
+      const m4aPath = originalPath.replace(/\.webm$/i, '.m4a');
+      
+      try {
+        // Convert WebM to M4A
+        await convertWebMToM4A(originalPath, m4aPath);
+        
+        // Use converted M4A file as the final audio
+        audioPath = m4aPath;
+        shouldDeleteOriginal = true; // Delete original WebM after conversion
+        
+        console.log('[WalkieTalkie] WebM converted to M4A:', {
+          original: originalPath,
+          converted: m4aPath,
+        });
+      } catch (conversionError: any) {
+        console.error('[WalkieTalkie] WebM conversion failed, using original file:', conversionError);
+        // If conversion fails, use original file (may fail on watchOS, but better than failing completely)
+        audioPath = originalPath;
+        shouldDeleteOriginal = false;
+      }
+    }
+
+    // Verify final audio file exists
     if (!fs.existsSync(audioPath)) {
       throw new Error(`Audio file not found at path: ${audioPath}`);
     }
+
+    const audioUrl = `/api/wt/audio/${messageId}`;
 
     console.log('[WalkieTalkie] Saving message to database:', {
       messageId,
@@ -144,6 +247,17 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
 
     console.log('[WalkieTalkie] Message saved:', messageId);
 
+    // Delete original WebM file if conversion was successful
+    if (shouldDeleteOriginal && fs.existsSync(originalPath)) {
+      try {
+        fs.unlinkSync(originalPath);
+        console.log('[WalkieTalkie] Deleted original WebM file:', originalPath);
+      } catch (deleteError) {
+        console.warn('[WalkieTalkie] Failed to delete original WebM file:', deleteError);
+        // Non-fatal: continue even if cleanup fails
+      }
+    }
+
     // Return response
     res.json({
       threadId,
@@ -162,10 +276,18 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
       userId: req.user?.userId,
     });
     
-    // Cleanup file on error
+    // Cleanup files on error
     if (req.file?.path) {
       try {
-        fs.unlinkSync(req.file.path);
+        // Delete original file
+        if (fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
+        }
+        // Also check for converted M4A file (if conversion started but failed)
+        const m4aPath = req.file.path.replace(/\.webm$/i, '.m4a');
+        if (fs.existsSync(m4aPath) && m4aPath !== req.file.path) {
+          fs.unlinkSync(m4aPath);
+        }
       } catch (unlinkError) {
         console.error('[WalkieTalkie] Error deleting file:', unlinkError);
       }
@@ -411,7 +533,7 @@ export const getAudio = async (req: Request, res: Response): Promise<void> => {
 
     // Determine content type based on file extension
     const ext = path.extname(audioPath).toLowerCase();
-    let contentType = 'audio/webm'; // Default to webm (browser default)
+    let contentType = 'audio/mp4'; // Default to M4A/MP4 (watchOS compatible)
     if (ext === '.wav') {
       contentType = 'audio/wav';
     } else if (ext === '.m4a' || ext === '.mp4') {
