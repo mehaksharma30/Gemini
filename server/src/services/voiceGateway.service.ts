@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server as HttpServer } from 'http';
 
-const PING_INTERVAL = 30000; // 30 seconds
+const PING_INTERVAL = 10000; // 10 seconds - more frequent keepalive for better connection stability
 
 // Store rooms: callId -> Set of WebSocket connections
 const rooms = new Map<string, Set<WebSocket>>();
@@ -65,13 +65,17 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       const xForwardedFor = info.req.headers['x-forwarded-for'] || 'none';
       const xForwardedProto = info.req.headers['x-forwarded-proto'] || 'none';
       
-      console.log(`[Voice Gateway] 🔄 Connection attempt from ${origin}`);
-      console.log(`[Voice Gateway] Path: ${pathname}, Full URL: ${info.req.url}`);
-      console.log(`[Voice Gateway] Host: ${host}, Secure: ${info.secure}`);
-      console.log(`[Voice Gateway] X-Forwarded-For: ${xForwardedFor}, X-Forwarded-Proto: ${xForwardedProto}`);
+      console.log(`[Voice Gateway] 🔄🔍 CONNECTION ATTEMPT - ${new Date().toISOString()}`);
+      console.log(`[Voice Gateway] Origin: ${origin}`);
+      console.log(`[Voice Gateway] Path: ${pathname}`);
+      console.log(`[Voice Gateway] Full URL: ${info.req.url}`);
+      console.log(`[Voice Gateway] Host: ${host}`);
+      console.log(`[Voice Gateway] Secure: ${info.secure}`);
+      console.log(`[Voice Gateway] X-Forwarded-For: ${xForwardedFor}`);
+      console.log(`[Voice Gateway] X-Forwarded-Proto: ${xForwardedProto}`);
       console.log(`[Voice Gateway] Upgrade header: ${info.req.headers.upgrade}`);
       console.log(`[Voice Gateway] Connection header: ${info.req.headers.connection}`);
-      console.log(`[Voice Gateway] User-Agent: ${userAgent.substring(0, 100)}`);
+      console.log(`[Voice Gateway] User-Agent: ${userAgent}`);
       
       // Accept both /voice-gateway and /vo_* paths (for backward compatibility and different client implementations)
       const isVoiceGatewayPath = pathname === '/voice-gateway' || pathname === '/voice-gateway/';
@@ -83,14 +87,30 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         return false;
       }
       
-      // Verify origin (for production security)
-      // In production, origin should match allowed origins
-      // In development, allow all origins for easier testing
+      // CRITICAL FIX: Detect watchOS/iOS clients and allow them
+      // WatchOS and iOS WebSocket clients often don't send proper origin headers
+      const isWatchOS = userAgent.includes('Watch') || userAgent.includes('watchOS');
+      const isIOS = userAgent.includes('iPhone') || userAgent.includes('iPad') || userAgent.includes('iOS');
+      const isMobile = isWatchOS || isIOS;
+      
+      // CRITICAL: Allow connections from watch/iOS even without proper origin
+      // This is safe because we verify the WebSocket handshake and validate callId/userId
+      if (isMobile) {
+        console.log(`[Voice Gateway] ✅ Allowing mobile/watch connection (User-Agent: ${userAgent.substring(0, 100)})`);
+        console.log(`[Voice Gateway] Device type: ${isWatchOS ? 'watchOS' : isIOS ? 'iOS' : 'unknown mobile'}`);
+        return true;
+      }
+      
+      // For non-mobile clients, verify origin (for production security)
       const isProduction = process.env.NODE_ENV === 'production';
       if (isProduction && origin !== 'unknown origin' && !allowedOrigins.includes(origin)) {
-        console.warn(`[Voice Gateway] ❌ Rejected connection from unauthorized origin: ${origin}`);
-        console.warn(`[Voice Gateway] Allowed origins: ${allowedOrigins.join(', ')}`);
-        return false;
+        // CRITICAL: Also allow if origin is missing/null (some clients don't send it)
+        // Only block if origin is explicitly set to a disallowed value
+        if (origin && origin !== 'null' && origin !== 'unknown origin') {
+          console.warn(`[Voice Gateway] ❌ Rejected connection from unauthorized origin: ${origin}`);
+          console.warn(`[Voice Gateway] Allowed origins: ${allowedOrigins.join(', ')}`);
+          return false;
+        }
       }
       
       console.log(`[Voice Gateway] ✅ Accepting connection to ${pathname} from ${origin}`);
@@ -180,10 +200,20 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
 
     console.log(`[Voice Gateway] ✅ New connection: userId=${userId}, callId=${callId}`);
     console.log(`[Voice Gateway] 📊 Connection details: origin=${req.headers.origin || 'none'}, path=${pathname}, fullURL=${req.url}`);
+    console.log(`[Voice Gateway] 🔍 Raw callId length: ${callId?.length || 0}, userId length: ${userId?.length || 0}`);
 
     // CRITICAL FIX: Normalize callId FIRST before storing connection metadata
     // This ensures consistency between connection metadata and room lookup
-    const normalizedCallId = callId.trim();
+    // CRITICAL: Also decode URL encoding to handle special characters
+    let normalizedCallId = callId.trim();
+    try {
+      // Decode URL encoding (e.g., %2D becomes -)
+      normalizedCallId = decodeURIComponent(normalizedCallId);
+    } catch (e) {
+      // If decoding fails, use trimmed version
+      console.warn(`[Voice Gateway] ⚠️ Failed to decode callId, using trimmed version: ${normalizedCallId}`);
+    }
+    console.log(`[Voice Gateway] 🔍 Normalized callId: "${normalizedCallId}" (length=${normalizedCallId.length})`);
     
     // Store connection metadata with NORMALIZED callId
     const connId = `${userId}-${Date.now()}`;
@@ -244,9 +274,52 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     // CRITICAL: Log all participants in room for debugging
     const allParticipants = Array.from(rooms.get(normalizedCallId)!).map(ws => {
       const c = connections.get(ws);
-      return c ? `${c.userId}(readyState=${ws.readyState})` : 'unknown';
+      return c ? `${c.userId}(readyState=${ws.readyState}, callId="${c.callId}")` : 'unknown';
     }).filter(Boolean);
     console.log(`[Voice Gateway] 📋 Room ${normalizedCallId} participants: [${allParticipants.join(', ')}]`);
+    
+    // CRITICAL: Log ALL rooms to diagnose why second user isn't joining
+    console.log(`[Voice Gateway] 🔍 ALL ROOMS ON SERVER:`, Array.from(rooms.entries()).map(([id, roomSet]) => {
+      const roomParticipants = Array.from(roomSet).map(rws => {
+        const rc = connections.get(rws);
+        return rc ? `${rc.userId}(callId="${rc.callId}")` : 'unknown';
+      }).filter(Boolean);
+      return `\n  - Room "${id}" (${roomSet.size} participants): [${roomParticipants.join(', ')}]`;
+    }).join(''));
+    
+    // CRITICAL: If room has 2 participants, log success
+    if (roomSize === 2) {
+      console.log(`[Voice Gateway] 🎉🎉🎉 SUCCESS: Room ${normalizedCallId} now has 2 participants - ready for two-way communication!`);
+      console.log(`[Voice Gateway] 🎉 Participants: [${allParticipants.join(', ')}]`);
+      
+      // CRITICAL: Send room_status to BOTH participants to confirm they're in the same room
+      const roomStatusMessage = JSON.stringify({
+        type: 'room_status',
+        callId: normalizedCallId,
+        roomSize: 2,
+        participants: allParticipants.map(p => {
+          const match = p.match(/^([^(]+)/);
+          return match ? match[1] : p;
+        }),
+        ready: true
+      });
+      
+      rooms.get(normalizedCallId)!.forEach(roomWs => {
+        if (roomWs.readyState === WebSocket.OPEN) {
+          try {
+            roomWs.send(roomStatusMessage);
+            console.log(`[Voice Gateway] ✅ Sent room_status (ready=true) to participant`);
+          } catch (error: any) {
+            console.error(`[Voice Gateway] Error sending room_status:`, error.message);
+          }
+        }
+      });
+    } else if (roomSize === 1) {
+      console.warn(`[Voice Gateway] ⚠️ WARNING: Room ${normalizedCallId} has only 1 participant (${userId}). Waiting for second user to join...`);
+      console.warn(`[Voice Gateway] ⚠️ Expected callId format: <userId1>-<userId2> (sorted user IDs)`);
+      console.warn(`[Voice Gateway] ⚠️ Current callId: "${normalizedCallId}"`);
+      console.warn(`[Voice Gateway] ⚠️ Current userId: "${userId}"`);
+    }
     
     // INSTRUMENTATION: Log room participants to verify both users in same callId
     const participants = Array.from(rooms.get(normalizedCallId)!).map(roomWs => {
@@ -293,10 +366,19 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
 
     // Initialize isAlive flag
     (ws as any).isAlive = true;
+    (ws as any).lastPongTime = Date.now();
 
     // Handle pong for keepalive
     ws.on('pong', () => {
       (ws as any).isAlive = true;
+      (ws as any).lastPongTime = Date.now();
+      const conn = connections.get(ws);
+      if (conn) {
+        // Log pong received (first few times only)
+        if ((conn.packetsReceived || 0) < 5) {
+          console.log(`[Voice Gateway] ✅ Pong received from ${conn.userId} (callId: ${conn.callId})`);
+        }
+      }
     });
 
     // Handle incoming binary messages (audio packets)
@@ -704,28 +786,37 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
         const reasonStr = reason && reason.length > 0 ? reason.toString() : 'none';
         console.log(`[Voice Gateway] ❌❌❌ User ${conn.userId} disconnected from call ${conn.callId} (code: ${code}, reason: ${reasonStr})`);
         
+        // CRITICAL: Log room state BEFORE removing this connection
+        const roomBefore = rooms.get(conn.callId);
+        const roomSizeBefore = roomBefore ? roomBefore.size : 0;
+        console.log(`[Voice Gateway] 📊 Room state BEFORE disconnect: callId=${conn.callId}, roomSize=${roomSizeBefore}`);
+        
         // Remove from room
         const room = rooms.get(conn.callId);
         if (room) {
           room.delete(ws);
+          const roomSizeAfter = room.size;
           if (room.size === 0) {
             rooms.delete(conn.callId);
             console.log(`[Voice Gateway] Room ${conn.callId} closed (no participants)`);
           } else {
-            console.log(`[Voice Gateway] Room ${conn.callId} now has ${room.size} participant${room.size !== 1 ? 's' : ''}`);
+            console.log(`[Voice Gateway] Room ${conn.callId} now has ${roomSizeAfter} participant${roomSizeAfter !== 1 ? 's' : ''} (was ${roomSizeBefore})`);
             
-            // CRITICAL: Notify remaining participants that someone left
-            const remainingParticipants = Array.from(room).map(ws => {
-              const c = connections.get(ws);
+            // CRITICAL: Log remaining participants
+            const remainingParticipants = Array.from(room).map(roomWs => {
+              const c = connections.get(roomWs);
               return c ? c.userId : null;
             }).filter(Boolean) as string[];
+            console.log(`[Voice Gateway] 📋 Remaining participants: [${remainingParticipants.join(', ')}]`);
             
+            // CRITICAL: Notify remaining participants that someone left
             room.forEach((otherWs) => {
               if (otherWs !== ws && otherWs.readyState === WebSocket.OPEN) {
                 try {
                   otherWs.send(JSON.stringify({
                     type: 'room_status',
                     callId: conn.callId,
+                    roomSize: roomSizeAfter,
                     participants: remainingParticipants,
                     left: conn.userId
                   }));
@@ -735,9 +826,13 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
               }
             });
           }
+        } else {
+          console.warn(`[Voice Gateway] ⚠️ WARNING: No room found for callId ${conn.callId} when disconnecting ${conn.userId}`);
         }
         
         connections.delete(ws);
+      } else {
+        console.warn(`[Voice Gateway] ⚠️ WARNING: Connection closed but no metadata found (code: ${code})`);
       }
     });
 
@@ -751,13 +846,30 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
     setTimeout(() => {
       try {
         if (ws.readyState === WebSocket.OPEN) {
+          // Send connection confirmation
           ws.send(JSON.stringify({
             type: 'connected',
             callId: normalizedCallId, // CRITICAL FIX: Use normalized callId
             userId,
             timestamp: Date.now(),
           }));
-          console.log(`[Voice Gateway] Sent connection confirmation to ${userId} for call ${normalizedCallId}`);
+          console.log(`[Voice Gateway] ✅ Sent connection confirmation to ${userId} for call ${normalizedCallId}`);
+          
+          // CRITICAL: Send room status immediately to help client verify connection
+          const currentRoomSize = rooms.get(normalizedCallId)?.size || 0;
+          const currentParticipants = Array.from(rooms.get(normalizedCallId) || []).map(rws => {
+            const rc = connections.get(rws);
+            return rc ? rc.userId : 'unknown';
+          }).filter(Boolean);
+          
+          ws.send(JSON.stringify({
+            type: 'room_status',
+            callId: normalizedCallId,
+            roomSize: currentRoomSize,
+            participants: currentParticipants,
+            ready: currentRoomSize >= 2
+          }));
+          console.log(`[Voice Gateway] ✅ Sent initial room_status to ${userId}: roomSize=${currentRoomSize}, participants=[${currentParticipants.join(', ')}]`);
           
           // CRITICAL TEST: Send a test binary packet to verify binary transmission works
           // This will help diagnose if binary packets can be received at all
@@ -775,26 +887,70 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
           } catch (testError: any) {
             console.error(`[Voice Gateway] ❌ Error sending test binary packet to ${userId}:`, testError.message);
           }
+        } else {
+          console.warn(`[Voice Gateway] ⚠️ Cannot send connection confirmation: WebSocket readyState=${ws.readyState} (not OPEN=1)`);
         }
       } catch (error: any) {
-        console.error(`[Voice Gateway] Error sending connection confirmation:`, error.message);
+        console.error(`[Voice Gateway] ❌ Error sending connection confirmation:`, error.message);
       }
     }, 100);
   });
 
-  // Ping/pong keepalive
+  // Ping/pong keepalive with improved monitoring
   setInterval(() => {
+    const now = Date.now();
     wss.clients.forEach((ws) => {
-      if ((ws as any).isAlive === false) {
-        const conn = connections.get(ws);
-        console.log(`[Voice Gateway] ⚠️⚠️⚠️ Terminating inactive connection (no pong response): ${conn?.userId || 'unknown'}, callId: ${conn?.callId || 'unknown'}`);
-        return ws.terminate();
+      const conn = connections.get(ws);
+      const isAlive = (ws as any).isAlive;
+      const lastPongTime = (ws as any).lastPongTime || 0;
+      const timeSinceLastPong = now - lastPongTime;
+      
+      // Check if connection is dead (no pong response)
+      if (isAlive === false) {
+        console.log(`[Voice Gateway] ⚠️⚠️⚠️ Terminating inactive connection (no pong response): ${conn?.userId || 'unknown'}, callId: ${conn?.callId || 'unknown'}, timeSinceLastPong: ${timeSinceLastPong}ms`);
+        
+        // Remove from room before terminating
+        if (conn) {
+          const room = rooms.get(conn.callId);
+          if (room) {
+            room.delete(ws);
+            if (room.size === 0) {
+              rooms.delete(conn.callId);
+              console.log(`[Voice Gateway] Room ${conn.callId} closed (no participants after disconnect)`);
+            } else {
+              console.log(`[Voice Gateway] Room ${conn.callId} now has ${room.size} participant${room.size !== 1 ? 's' : ''} after disconnect`);
+            }
+          }
+          connections.delete(ws);
+        }
+        
+        try {
+          ws.terminate();
+        } catch (error) {
+          // Connection might already be closed
+        }
+        return;
       }
+      
+      // Mark as potentially dead, ping will reset if connection is alive
       (ws as any).isAlive = false;
+      
+      // Send ping
       try {
-        ws.ping();
-      } catch (error) {
-        // Connection might be closed, ignore
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.ping();
+          // Log ping sent (first few times only)
+          if (conn && (conn.packetsReceived || 0) < 5) {
+            console.log(`[Voice Gateway] 📡 Ping sent to ${conn.userId} (callId: ${conn.callId})`);
+          }
+        } else {
+          // WebSocket is not open, mark as dead
+          (ws as any).isAlive = false;
+        }
+      } catch (error: any) {
+        // Connection might be closed, mark as dead
+        (ws as any).isAlive = false;
+        console.warn(`[Voice Gateway] Error sending ping to ${conn?.userId || 'unknown'}:`, error.message);
       }
     });
   }, PING_INTERVAL);

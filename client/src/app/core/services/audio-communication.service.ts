@@ -109,25 +109,70 @@ export class AudioCommunicationService {
       this.targetUserId = targetUserId;
       
       // Create call ID (sorted to ensure consistency)
-      this.callId = [userId, targetUserId].sort().join('-');
-      console.log('[Audio Communication] Initializing for call:', this.callId);
+      // CRITICAL: Sort user IDs to ensure both users generate the SAME callId
+      // This is essential for both users to join the same room
+      const sortedUserIds = [userId, targetUserId].sort();
+      this.callId = sortedUserIds.join('-');
+      console.log('[Audio Communication] 🔄 Initializing for group:', this.callId);
+      console.log('[Audio Communication] 📊 User IDs: userId=', userId, ', targetUserId=', targetUserId, ', sorted=', sortedUserIds);
 
-      // Connect to Voice Gateway
-      await this.voiceGatewayService.connect(this.callId, userId);
+      // CRITICAL: Ensure mic is UNMUTED before connecting
+      // This prevents "micMuted=true" from blocking audio transmission
+      await this.voiceGatewayService.setMicMuted(false);
+      console.log('[Audio Communication] 🔧 Mic state set to UNMUTED before connection');
+
+      // Connect to Voice Gateway with comprehensive error handling
+      console.log(`[Audio Communication] 🔌 Connecting to Voice Gateway: callId="${this.callId}", userId="${userId}"`);
+      try {
+        await this.voiceGatewayService.connect(this.callId, userId);
+        console.log(`[Audio Communication] ✅ Connect() call completed`);
+      } catch (connectError: any) {
+        console.error(`[Audio Communication] ❌ Connect() failed:`, connectError);
+        throw new Error(`Voice Gateway connection failed: ${connectError.message || connectError}`);
+      }
       
-      // Wait for connection to be established
+      // Wait for connection to be established with better error reporting
       let connected = false;
+      let lastError: string = '';
       for (let i = 0; i < 50; i++) { // Wait up to 5 seconds
         if (this.voiceGatewayService.isConnected()) {
           connected = true;
+          console.log(`[Audio Communication] ✅ Voice Gateway connected after ${i * 100}ms`);
           break;
+        }
+        // Check for connection errors
+        const ws = (this.voiceGatewayService as any).ws;
+        if (ws) {
+          const readyState = ws.readyState;
+          if (readyState === WebSocket.CLOSED || readyState === WebSocket.CLOSING) {
+            lastError = `WebSocket closed (readyState=${readyState})`;
+            console.error(`[Audio Communication] ⚠️ WebSocket state: ${readyState} (CLOSED=3, CLOSING=2)`);
+          } else if (readyState === WebSocket.CONNECTING) {
+            // Still connecting, wait a bit more
+            if (i % 10 === 0) {
+              console.log(`[Audio Communication] ⏳ Still connecting... (attempt ${i + 1}/50)`);
+            }
+          }
+        } else {
+          if (i % 10 === 0) {
+            console.warn(`[Audio Communication] ⚠️ WebSocket not created yet (attempt ${i + 1}/50)`);
+          }
         }
         await new Promise(resolve => setTimeout(resolve, 100));
       }
 
       if (!connected) {
-        throw new Error('Failed to establish Voice Gateway connection');
+        const errorMsg = lastError || 'Connection timeout after 5 seconds';
+        console.error(`[Audio Communication] ❌ Connection failed: ${errorMsg}`);
+        console.error(`[Audio Communication] ❌ CallId: "${this.callId}", UserId: "${userId}"`);
+        const gatewayUrl = (this.voiceGatewayService as any).GATEWAY_URL || 'unknown';
+        console.error(`[Audio Communication] ❌ Voice Gateway URL: ${gatewayUrl}`);
+        throw new Error(`Failed to establish Voice Gateway connection: ${errorMsg}. Check console for details.`);
       }
+      
+      // CRITICAL: Verify we're in the right room by waiting for room_status message
+      console.log('[Audio Communication] ⏳ Waiting for room status confirmation...');
+      await new Promise(resolve => setTimeout(resolve, 500)); // Give server time to send room_status
 
       // CRITICAL: Create new audio context if null or closed (don't reuse closed context)
       if (!this.audioContext || this.audioContext.state === 'closed') {

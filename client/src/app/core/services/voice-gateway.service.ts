@@ -11,10 +11,11 @@ const PACKET_SIZE_OLD = 12 + PAYLOAD_SIZE; // Old format: header (12) + payload 
 const PACKET_SIZE = 12 + 24 + PAYLOAD_SIZE; // New format: seq (4) + timestamp (8) + senderId (24) + payload (640) = 676 bytes
 const SENDER_ID_SIZE = 24; // Fixed 24 bytes for senderId
 
-// Jitter buffer settings
-const MIN_BUFFER_PACKETS = 25; // ~500ms buffer before starting playback
-const MAX_BUFFER_PACKETS = 50; // ~1000ms max buffer
-const LOW_BUFFER_THRESHOLD = 5; // Pause scheduling if buffer drops below this (but don't reset state) - lowered from 12 to prevent premature pausing
+// Jitter buffer settings - Optimized for smooth WhatsApp-like calls
+// Reduced buffer sizes for lower latency while maintaining smooth playback
+const MIN_BUFFER_PACKETS = 10; // ~200ms buffer before starting playback (reduced from 25 for lower latency)
+const MAX_BUFFER_PACKETS = 30; // ~600ms max buffer (reduced from 50)
+const LOW_BUFFER_THRESHOLD = 5; // Pause scheduling if buffer drops below this (reduced from 12 for faster recovery)
 
 // Voice Gateway WebSocket URL (from environment)
 const GATEWAY_URL = environment.voiceGatewayUrl;
@@ -52,17 +53,22 @@ export class VoiceGatewayService {
   
   // Reconnection state
   private reconnectAttempts: number = 0;
-  private maxReconnectAttempts: number = 10;
+  private maxReconnectAttempts: number = 20; // Increased from 10 to 20 for better reliability
   private reconnectDelay: number = 1000; // Start with 1 second
   private reconnectTimeout: any = null;
   private isReconnecting: boolean = false;
   private shouldReconnect: boolean = true;
+  
+  // Connection health monitoring
+  private lastMessageTime: number = 0;
+  private healthCheckInterval: any = null;
   
   // Audio context for playback
   private audioContext: AudioContext | null = null;
   private playbackGain: GainNode | null = null; // Dedicated gain node for remote audio playback (speaker mute/unmute)
   
   // Mute states
+  // CRITICAL: Default to UNMUTED to ensure audio is sent by default
   private isMicMuted: boolean = false;
   private isSpeakerMuted: boolean = false;
   
@@ -89,6 +95,7 @@ export class VoiceGatewayService {
   private activeUserId: string | null = null;
   private onmessageHandlerAttached: boolean = false;
   private currentWs: WebSocket | null = null; // Track current WS to prevent duplicate handlers
+  private scheduleAnimationFrame: number | null = null; // Track RAF for cleanup
 
   // Connection state
   private connectedSubject = new BehaviorSubject<boolean>(false);
@@ -103,11 +110,51 @@ export class VoiceGatewayService {
   }
 
   /**
+   * CRITICAL: Clean up WebSocket connection completely
+   * This prevents duplicate connections and handlers
+   */
+  private cleanupWs(): void {
+    console.log('[Voice Gateway] 🧹 Cleaning up WebSocket connection...');
+    
+    // Remove all handlers first
+    if (this.ws) {
+      try {
+        this.ws.onopen = null;
+        this.ws.onmessage = null;
+        this.ws.onerror = null;
+        this.ws.onclose = null;
+      } catch (e) {
+        // Ignore errors when removing handlers
+      }
+      
+      // Close connection if still open
+      if (this.ws.readyState !== WebSocket.CLOSED && this.ws.readyState !== WebSocket.CLOSING) {
+        try {
+          this.ws.close(1000, 'Cleanup');
+        } catch (e) {
+          // Ignore close errors
+        }
+      }
+      
+      this.ws = null;
+    }
+    
+    // Reset handler tracking
+    this.onmessageHandlerAttached = false;
+    this.currentWs = null;
+    this.activeCallId = null;
+    this.activeUserId = null;
+  }
+
+  /**
    * Connect to Voice Gateway WebSocket
    * @param callId - Call ID (room identifier)
    * @param userId - User ID
    */
   async connect(callId: string, userId: string): Promise<void> {
+    // CRITICAL: Clean up any existing connection FIRST to prevent duplicates
+    this.cleanupWs();
+    
     // CRITICAL: Singleton connection guard - ensure only ONE WebSocket per callId
     // If already connected to the same call, return early
     if (this.ws && this.ws.readyState === WebSocket.OPEN && this.activeCallId === callId && this.activeUserId === userId) {
@@ -115,36 +162,23 @@ export class VoiceGatewayService {
       console.log(`[Voice Gateway] Active connection: callId=${this.activeCallId}, userId=${this.activeUserId}, readyState=${this.ws.readyState}`);
       return;
     }
-    
-    // CRITICAL: If connecting to different call, close previous connection first
-    if (this.ws && (this.activeCallId !== callId || this.activeUserId !== userId)) {
-      console.log(`[Voice Gateway] 🔄 Switching calls: ${this.activeCallId}/${this.activeUserId} -> ${callId}/${userId}`);
-      
-      // Remove all handlers to prevent duplicate handlers
-      this.ws.onopen = null;
-      this.ws.onmessage = null;
-      this.ws.onerror = null;
-      this.ws.onclose = null;
-      this.onmessageHandlerAttached = false;
-      this.currentWs = null;
-      
-      // Close existing connection cleanly
-      if (this.ws.readyState !== WebSocket.CLOSED && this.ws.readyState !== WebSocket.CLOSING) {
-        this.ws.close(1000, 'Switching to new call');
-      }
-      this.ws = null;
-      this.activeCallId = null;
-      this.activeUserId = null;
-    }
 
-    // Clean up intervals to prevent duplicates
+    // Clean up intervals and animation frames to prevent duplicates
     if (this.playbackSchedulerInterval) {
       clearInterval(this.playbackSchedulerInterval);
       this.playbackSchedulerInterval = null;
     }
+    if (this.scheduleAnimationFrame) {
+      cancelAnimationFrame(this.scheduleAnimationFrame);
+      this.scheduleAnimationFrame = null;
+    }
     if (this.statsLogInterval) {
       clearInterval(this.statsLogInterval);
       this.statsLogInterval = null;
+    }
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
     }
 
     // Cancel any pending reconnection
@@ -164,6 +198,11 @@ export class VoiceGatewayService {
     this.packetsSentCount = 0;
     this.packetsRecvCount = 0;
     this.packetsPlayedCount = 0;
+    
+    // CRITICAL: Ensure mic is UNMUTED by default when connecting
+    // This prevents "micMuted=true" from blocking audio transmission
+    this.isMicMuted = false;
+    console.log(`[Voice Gateway] 🔧 Mic state reset to UNMUTED on connect (callId: ${callId}, userId: ${userId})`);
 
     return this.attemptConnection();
   }
@@ -180,10 +219,14 @@ export class VoiceGatewayService {
         // CRITICAL: Normalize callId (trim whitespace) to prevent mismatches
         const normalizedCallId = this.callId.trim();
         const normalizedUserId = this.userId.trim();
-        const url = `${baseUrl}/?callId=${encodeURIComponent(normalizedCallId)}&userId=${encodeURIComponent(normalizedUserId)}`;
+        // CRITICAL: Use encodeURIComponent to handle special characters in callId/userId
+        const encodedCallId = encodeURIComponent(normalizedCallId);
+        const encodedUserId = encodeURIComponent(normalizedUserId);
+        const url = `${baseUrl}/?callId=${encodedCallId}&userId=${encodedUserId}`;
         
         console.log(`[Voice Gateway] 🔌 Connecting to: ${url}`);
-        console.log(`[Voice Gateway] 📊 Connection params: callId="${normalizedCallId}" (length=${normalizedCallId.length}), userId="${normalizedUserId}" (length=${normalizedUserId.length})`);
+        console.log(`[Voice Gateway] 📊 Connection params: callId="${normalizedCallId}" (length=${normalizedCallId.length}, encoded length=${encodedCallId.length}), userId="${normalizedUserId}" (length=${normalizedUserId.length}, encoded length=${encodedUserId.length})`);
+        console.log(`[Voice Gateway] 🔍 Full URL breakdown: baseUrl="${baseUrl}", callId="${normalizedCallId}", userId="${normalizedUserId}"`);
         
         // CRITICAL: Verify callId and userId are not empty
         if (!normalizedCallId || normalizedCallId.length === 0) {
@@ -215,6 +258,10 @@ export class VoiceGatewayService {
         // Create new WebSocket connection
         console.log(`[Voice Gateway] 🔌 Creating new WebSocket connection: ${url}`);
         this.ws = new WebSocket(url);
+        
+        // CRITICAL: Set binaryType to 'arraybuffer' to avoid Blob overhead and simplify handling
+        this.ws.binaryType = 'arraybuffer';
+        
         this.currentWs = this.ws; // Track current WS
         
         // INSTRUMENTATION: Log WebSocket readyState at creation
@@ -268,6 +315,16 @@ export class VoiceGatewayService {
             this.logStats();
           }, 1000);
           
+          // Start connection health monitoring
+          this.lastMessageTime = Date.now();
+          if (this.healthCheckInterval) {
+            clearInterval(this.healthCheckInterval);
+            this.healthCheckInterval = null;
+          }
+          this.healthCheckInterval = setInterval(() => {
+            this.checkConnectionHealth();
+          }, 5000); // Check every 5 seconds
+          
           resolve();
         };
 
@@ -288,6 +345,9 @@ export class VoiceGatewayService {
         
         // CRITICAL: Attach handler first, then verify
         this.ws.onmessage = async (event) => {
+          // CRITICAL: Update last message time for health monitoring
+          this.lastMessageTime = Date.now();
+          
           // CRITICAL: Log EVERY message received to diagnose why recv/sec=0
           // INSTRUMENTATION: Log WebSocket state when message arrives
           const wsState = this.ws?.readyState ?? 'null';
@@ -301,16 +361,15 @@ export class VoiceGatewayService {
                           typeof event.data === 'string' ? 'string' :
                           typeof event.data;
           
-          // CRITICAL: Log EVERY message (not just first 10) to diagnose why recv/sec=0
-          // If we see this log, messages ARE arriving at client
-          // CRITICAL: Log binary messages with more detail
-          if (dataType === 'Blob' || dataType === 'ArrayBuffer' || (event.data && typeof event.data !== 'string')) {
+          // CRITICAL: Only log first few messages and occasionally to avoid spam
+          // This prevents the duplicate onmessage spam you were seeing
+          const shouldLog = this.packetsRecvCount < 5 || this.packetsRecvCount % 100 === 0;
+          
+          if (shouldLog && (dataType === 'Blob' || dataType === 'ArrayBuffer' || (event.data && typeof event.data !== 'string'))) {
             const size = event.data instanceof Blob ? event.data.size : 
                         event.data instanceof ArrayBuffer ? event.data.byteLength :
                         (event.data as any)?.byteLength || (event.data as any)?.length || 'unknown';
-            console.log(`[Voice Gateway] 📨 onmessage FIRED: BINARY DATA! packetsRecvCount=${this.packetsRecvCount}, size=${size}, type=${dataType}, constructor=${dataConstructor}`);
-          } else {
-            console.log(`[Voice Gateway] 📨 onmessage FIRED: packetsRecvCount=${this.packetsRecvCount}, ws.readyState=${wsState}, currentWs.readyState=${currentWsState}, wsMatch=${wsMatch}, event.data type=${dataType}`);
+            console.log(`[Voice Gateway] 📨 Binary packet #${this.packetsRecvCount + 1}, size=${size}, type=${dataType}`);
           }
           
           // CRITICAL: Verify this is still the current WS (prevent stale handler)
@@ -342,19 +401,17 @@ export class VoiceGatewayService {
                   console.error(`[Voice Gateway] ⚠️ WARNING: Server userId (${msg.userId}) doesn't match local userId (${this.userId})!`);
                 }
               } else if (msg.type === 'room_status') {
-                const roomSize = msg.participants?.length || msg.roomSize || 0;
-                const leftUserId = msg.left;
-                console.log(`[Voice Gateway] 📊 Room status: callId=${msg.callId}, roomSize=${roomSize}, participants: [${msg.participants?.join(', ') || 'none'}], left=${leftUserId || 'none'}`);
-                
-                // CRITICAL: If someone left and we're the only one left, stop sending packets
-                if (leftUserId && roomSize < 2) {
-                  console.warn(`[Voice Gateway] ⚠️⚠️⚠️ Other user (${leftUserId}) left the call! Room now has only ${roomSize} participant(s). Stopping audio send.`);
-                  // Don't disconnect, just stop sending - they might reconnect
-                  // The audio capture will continue but packets won't be sent (gateway will block)
-                } else if (roomSize < 2) {
-                  console.warn(`[Voice Gateway] ⚠️ WARNING: Room has only ${roomSize} participant(s) - no other user in call!`);
+                console.log(`[Voice Gateway] 📊 Room status: callId=${msg.callId}, roomSize=${msg.roomSize}, participants: [${msg.participants?.join(', ') || 'none'}], ready=${msg.ready || false}`);
+                // CRITICAL: Verify we're in the right room
+                if (msg.roomSize < 2) {
+                  console.warn(`[Voice Gateway] ⚠️ WARNING: Room has only ${msg.roomSize} participant(s) - waiting for second user to join...`);
+                  console.warn(`[Voice Gateway] ⚠️ Expected callId format: <userId1>-<userId2> (sorted user IDs)`);
+                  console.warn(`[Voice Gateway] ⚠️ Current callId: "${msg.callId}", Local callId: "${this.callId}"`);
                 } else {
-                  console.log(`[Voice Gateway] ✅ Room has ${roomSize} participants - ready for audio relay`);
+                  console.log(`[Voice Gateway] ✅✅✅ Room has ${msg.roomSize} participants - ready for audio relay!`);
+                  if (msg.ready) {
+                    console.log(`[Voice Gateway] 🎉 Call is ready - both users connected!`);
+                  }
                 }
               } else {
                 console.log('[Voice Gateway] Received text message:', msg);
@@ -366,23 +423,27 @@ export class VoiceGatewayService {
           }
           
           // Handle binary data (audio packets)
+          // CRITICAL: Since we set binaryType='arraybuffer', event.data should always be ArrayBuffer
           let arrayBuffer: ArrayBuffer | null = null;
           let byteLength: number = 0;
           
           try {
             if (event.data instanceof ArrayBuffer) {
+              // This is the expected case (binaryType='arraybuffer')
               arrayBuffer = event.data;
               byteLength = arrayBuffer.byteLength;
-              // INSTRUMENTATION: Log ArrayBuffer details
-              console.log(`[Voice Gateway] RX: event.data constructor=${dataConstructor}, type=${dataType}, byteLength=${byteLength}`);
+              // Only log first few packets to avoid spam
+              if (this.packetsRecvCount === 0) {
+                console.log(`[Voice Gateway] RX: ArrayBuffer received (binaryType='arraybuffer'), byteLength=${byteLength}`);
+              }
             } else if (event.data instanceof Blob) {
-              // INSTRUMENTATION: Support Blob - convert to ArrayBuffer
+              // Fallback: Convert Blob to ArrayBuffer (shouldn't happen with binaryType='arraybuffer')
+              console.warn(`[Voice Gateway] ⚠️ Received Blob instead of ArrayBuffer (binaryType may not be set correctly)`);
               const blobSize = event.data.size;
               arrayBuffer = await event.data.arrayBuffer();
               if (arrayBuffer) {
                 byteLength = arrayBuffer.byteLength;
-                // INSTRUMENTATION: Log Blob details and converted size
-                console.log(`[Voice Gateway] RX: event.data constructor=${dataConstructor}, type=${dataType}, Blob.size=${blobSize}, converted ArrayBuffer.byteLength=${byteLength}`);
+                console.log(`[Voice Gateway] RX: Converted Blob to ArrayBuffer, Blob.size=${blobSize}, ArrayBuffer.byteLength=${byteLength}`);
               }
             } else if (event.data && typeof event.data === 'object') {
               // Node.js ws library sends Buffer or Uint8Array
@@ -494,7 +555,7 @@ export class VoiceGatewayService {
         
         this.ws.onclose = (event: CloseEvent) => {
           const connectionDuration = Date.now() - connectionStartTime;
-          console.log(`[Voice Gateway] 🔌 WebSocket CLOSED (code: ${event.code}, reason: ${event.reason || 'none'}, duration: ${connectionDuration}ms)`);
+          console.log(`[Voice Gateway] 🔌 WebSocket CLOSED (code: ${event.code}, reason: ${event.reason || 'none'}, duration: ${connectionDuration}ms, wasClean: ${event.wasClean})`);
           
           this.connectedSubject.next(false);
           this.cleanupPlayback();
@@ -517,9 +578,17 @@ export class VoiceGatewayService {
             this.activeUserId = null;
           }
           
-          // Attempt reconnection if not a clean close
-          if (this.shouldReconnect && event.code !== 1000 && !event.wasClean) {
+          // CRITICAL: Attempt reconnection for ANY unexpected close (not just non-clean closes)
+          // This ensures we reconnect even if the connection drops due to network issues
+          // Only skip reconnection if it was a clean close (code 1000) AND we're not in an active call
+          const isCleanClose = event.code === 1000 && event.wasClean;
+          const isActiveCall = this.callId && this.userId; // If we have callId/userId, we're in a call
+          
+          if (this.shouldReconnect && (!isCleanClose || isActiveCall)) {
+            console.log(`[Voice Gateway] 🔄 Scheduling reconnection (code: ${event.code}, wasClean: ${event.wasClean}, isActiveCall: ${isActiveCall})`);
             this.scheduleReconnect();
+          } else {
+            console.log(`[Voice Gateway] ⏹️ Not reconnecting (clean close and not in active call)`);
           }
         };
       } catch (error: any) {
@@ -540,6 +609,7 @@ export class VoiceGatewayService {
    */
   private scheduleReconnect(): void {
     if (this.isReconnecting || !this.shouldReconnect) {
+      console.log(`[Voice Gateway] ⏹️ Reconnection skipped (isReconnecting: ${this.isReconnecting}, shouldReconnect: ${this.shouldReconnect})`);
       return;
     }
 
@@ -555,16 +625,26 @@ export class VoiceGatewayService {
     // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
     const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 30000);
     
-    console.log(`[Voice Gateway] 🔄 Scheduling reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
+    console.log(`[Voice Gateway] 🔄 Scheduling reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms (callId: ${this.callId}, userId: ${this.userId})`);
     
     this.reconnectTimeout = setTimeout(() => {
       this.isReconnecting = false;
       if (this.callId && this.userId && this.shouldReconnect) {
-        console.log(`[Voice Gateway] 🔄 Reconnecting... (attempt ${this.reconnectAttempts})`);
-        this.attemptConnection().catch(error => {
+        console.log(`[Voice Gateway] 🔄 Reconnecting... (attempt ${this.reconnectAttempts}, callId: ${this.callId}, userId: ${this.userId})`);
+        this.attemptConnection().then(() => {
+          console.log(`[Voice Gateway] ✅ Reconnection successful (attempt ${this.reconnectAttempts})`);
+          this.reconnectAttempts = 0; // Reset on success
+        }).catch(error => {
           console.error('[Voice Gateway] Reconnection attempt failed:', error);
-          // Will schedule another reconnection via onclose handler
+          // Will schedule another reconnection via onclose handler or health check
+          this.isReconnecting = false;
+          if (this.shouldReconnect) {
+            this.scheduleReconnect();
+          }
         });
+      } else {
+        console.log(`[Voice Gateway] ⏹️ Reconnection cancelled (callId: ${this.callId}, userId: ${this.userId}, shouldReconnect: ${this.shouldReconnect})`);
+        this.isReconnecting = false;
       }
     }, delay);
   }
@@ -582,18 +662,8 @@ export class VoiceGatewayService {
     
     this.cleanupPlayback();
     
-    if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.onerror = null;
-      if (this.ws.readyState !== WebSocket.CLOSED) {
-        this.ws.close(1000, 'Client disconnect');
-      }
-      this.ws = null;
-    }
-    
-    // CRITICAL: Reset handler flag and current WS
-    this.onmessageHandlerAttached = false;
-    this.currentWs = null;
+    // CRITICAL: Use cleanupWs() to ensure complete cleanup
+    this.cleanupWs();
     
     // CRITICAL: Do NOT close audioContext on disconnect - set to null for next init
     this.audioContext = null;
@@ -788,11 +858,9 @@ export class VoiceGatewayService {
       this.isSchedulingPaused = false;
       console.log(`[Voice Gateway] Starting playback after unmute from seq ${this.nextPlaybackSeq} (buffer: ${this.jitterBuffer.size} packets)`);
       
-      // Start scheduler if not running
-      if (!this.playbackSchedulerInterval) {
-        this.playbackSchedulerInterval = setInterval(() => {
-          this.scheduleNextPacket();
-        }, FRAME_DURATION_MS);
+      // Start scheduler if not running (use requestAnimationFrame loop)
+      if (!this.scheduleAnimationFrame) {
+        this.startSchedulingLoop();
       }
     } else if (this.isPlaying && this.isSchedulingPaused && this.jitterBuffer.size >= LOW_BUFFER_THRESHOLD) {
       // Resume scheduling if it was paused (but don't reset state)
@@ -890,24 +958,30 @@ export class VoiceGatewayService {
     // Check if we should start playback (first time only)
     if (!this.isPlaying) {
       if (this.jitterBuffer.size >= MIN_BUFFER_PACKETS) {
-        // Initialize playback
+        // Initialize playback with optimized delay for smooth start
         const seqs = Array.from(this.jitterBuffer.keys()).sort((a, b) => a - b);
         this.nextPlaybackSeq = seqs[0];
-        this.nextPlayTime = this.audioContext.currentTime + 0.30; // 300ms initial delay
+        // Reduced initial delay from 300ms to 150ms for faster call start (WhatsApp-like)
+        this.nextPlayTime = this.audioContext.currentTime + 0.15;
         this.isPlaying = true;
         this.isSchedulingPaused = false;
-        console.log(`[Voice Gateway] Starting playback from seq ${this.nextPlaybackSeq} (buffer: ${this.jitterBuffer.size} packets, speakerMuted=${this.isSpeakerMuted})`);
+        console.log(`[Voice Gateway] 🎵 Starting playback from seq ${this.nextPlaybackSeq} (buffer: ${this.jitterBuffer.size} packets, initialDelay=150ms, speakerMuted=${this.isSpeakerMuted})`);
         
-        // Start periodic scheduler (every 20ms)
+        // CRITICAL: Start continuous playback scheduler using requestAnimationFrame
+        // This provides smooth, continuous scheduling instead of interval-based
         // IMPORTANT: Scheduler continues even when muted - playbackGain controls silence
-        // CRITICAL: Clear any existing interval first to prevent duplicates
+        // CRITICAL: Clear any existing scheduler first to prevent duplicates
         if (this.playbackSchedulerInterval) {
           clearInterval(this.playbackSchedulerInterval);
           this.playbackSchedulerInterval = null;
         }
-        this.playbackSchedulerInterval = setInterval(() => {
-          this.scheduleNextPacket();
-        }, FRAME_DURATION_MS);
+        if (this.scheduleAnimationFrame) {
+          cancelAnimationFrame(this.scheduleAnimationFrame);
+          this.scheduleAnimationFrame = null;
+        }
+        
+        // Start the continuous scheduling loop
+        this.startSchedulingLoop();
       } else {
         return; // Wait for more packets
       }
@@ -915,12 +989,12 @@ export class VoiceGatewayService {
 
     // Check if we should pause scheduling due to low buffer (but keep playback state intact)
     // NEVER set isPlaying=false or reset nextPlayTime/nextPlaybackSeq
-    // CRITICAL: Only pause if buffer is critically low (< 3 packets) to prevent audio gaps
-    if (this.isPlaying && this.jitterBuffer.size < 3) {
+    // CRITICAL: Only pause if buffer is critically low (below threshold) AND we're actively playing
+    if (this.isPlaying && this.jitterBuffer.size < LOW_BUFFER_THRESHOLD) {
       if (!this.isSchedulingPaused) {
         // Pause scheduling but keep all state intact
         this.isSchedulingPaused = true;
-        console.warn(`[Voice Gateway] ⚠️ Scheduling paused (critically low buffer: ${this.jitterBuffer.size} < 3 packets) - state preserved`);
+        console.warn(`[Voice Gateway] ⚠️ Scheduling paused (low buffer: ${this.jitterBuffer.size} < ${LOW_BUFFER_THRESHOLD} packets) - waiting for more packets`);
       }
       // Don't return - continue to try scheduling if packets are available
     }
@@ -955,49 +1029,82 @@ export class VoiceGatewayService {
   }
 
   /**
-   * Schedule the next packet for playback
-   * IMPORTANT: Only schedules if not paused due to low buffer
+   * CRITICAL: Start continuous playback scheduling loop using requestAnimationFrame
+   * This replaces the broken setInterval approach and ensures continuous scheduling
    */
-  private scheduleNextPacket(): void {
-    if (!this.audioContext || !this.isPlaying || this.nextPlaybackSeq === null || !this.playbackGain) {
-      return;
+  private startSchedulingLoop(): void {
+    if (this.scheduleAnimationFrame) {
+      cancelAnimationFrame(this.scheduleAnimationFrame);
     }
     
-    // CRITICAL: Even if scheduling is paused, continue scheduling if we have packets available
-    // Only skip if buffer is critically low (< 3 packets) to prevent audio gaps
-    if (this.isSchedulingPaused && this.jitterBuffer.size < 3) {
-      return; // Buffer too low, wait for more packets
-    }
+    const scheduleLoop = () => {
+      try {
+        // Only schedule if conditions are met
+        if (!this.audioContext || !this.isPlaying || this.isSchedulingPaused || this.nextPlaybackSeq === null || !this.playbackGain) {
+          this.scheduleAnimationFrame = requestAnimationFrame(scheduleLoop);
+          return;
+        }
 
-    const now = this.audioContext.currentTime;
-    
-    // If nextPlayTime is in the future, wait
-    if (this.nextPlayTime! > now + 0.01) {
-      return;
-    }
-
-    // Find next consecutive packet
-    while (this.jitterBuffer.has(this.nextPlaybackSeq)) {
-      const packet = this.jitterBuffer.get(this.nextPlaybackSeq);
-      this.jitterBuffer.delete(this.nextPlaybackSeq);
-
-      this.scheduleAudioChunk(packet!.payload);
-      this.nextPlaybackSeq++;
-
-      // Update nextPlayTime for the next packet (20ms = 0.02 seconds)
-      this.nextPlayTime! += 0.02;
-      
-      // If we've fallen too far behind, adjust nextPlayTime forward slightly (don't reset completely)
-      if (this.nextPlayTime! < now - 0.1) {
-        this.nextPlayTime = now + 0.05; // Small forward adjustment, don't reset
+        const ctx = this.audioContext;
+        const now = ctx.currentTime;
+        const LOOKAHEAD = 0.25; // Schedule up to 250ms ahead (like WhatsApp)
+        
+        // CRITICAL: If we fell behind (nextPlayTime is in the past), snap forward
+        // This fixes the negative scheduledAheadMs issue
+        if (this.nextPlayTime! < now - 0.1) {
+          console.warn(`[Voice Gateway] ⚠️ Scheduler fell behind, snapping forward: nextPlayTime=${this.nextPlayTime}, currentTime=${now}, diff=${(now - this.nextPlayTime!) * 1000}ms`);
+          this.nextPlayTime = now + 0.02; // Small headroom (20ms)
+        }
+        
+        // Schedule as many packets as we can within the lookahead window
+        let scheduled = 0;
+        while (this.jitterBuffer.has(this.nextPlaybackSeq) && this.nextPlayTime! < now + LOOKAHEAD) {
+          const packet = this.jitterBuffer.get(this.nextPlaybackSeq);
+          if (!packet) break;
+          
+          this.jitterBuffer.delete(this.nextPlaybackSeq);
+          
+          // Schedule this packet
+          const scheduledTime = Math.max(this.nextPlayTime!, now + 0.005); // At least 5ms in future
+          this.scheduleAudioChunk(packet.payload, scheduledTime);
+          
+          // Advance sequence and time
+          this.nextPlaybackSeq++;
+          
+          // CRITICAL: Calculate exact frame duration based on sample rate
+          // Frame is 320 samples at 16kHz = 0.02 seconds
+          const frameDuration = SAMPLES_PER_FRAME / SAMPLE_RATE; // 320 / 16000 = 0.02
+          this.nextPlayTime = scheduledTime + frameDuration;
+          
+          scheduled++;
+          
+          // Safety: don't schedule more than 50 packets in one frame (1 second of audio)
+          if (scheduled >= 50) break;
+        }
+        
+        // Continue the loop
+        this.scheduleAnimationFrame = requestAnimationFrame(scheduleLoop);
+      } catch (error: any) {
+        console.error('[Voice Gateway] ❌ Scheduler loop crashed:', error);
+        // If scheduler crashes, audio will never play - this matches your symptom
+        // Reset state and try to recover
+        this.isPlaying = false;
+        this.isSchedulingPaused = false;
+        this.scheduleAnimationFrame = null;
       }
-    }
+    };
+    
+    // Start the loop
+    this.scheduleAnimationFrame = requestAnimationFrame(scheduleLoop);
+    console.log('[Voice Gateway] ✅ Started continuous playback scheduler (requestAnimationFrame)');
   }
 
   /**
    * Schedule audio chunk for continuous playback
+   * @param pcmData - PCM16 audio data (640 bytes)
+   * @param scheduledTime - AudioContext time to start playback (in seconds)
    */
-  private scheduleAudioChunk(pcmData: ArrayBuffer): void {
+  private scheduleAudioChunk(pcmData: ArrayBuffer, scheduledTime: number): void {
     if (!this.audioContext || !this.isPlaying || !this.playbackGain) {
       return;
     }
@@ -1078,11 +1185,20 @@ export class VoiceGatewayService {
       const source = this.audioContext.createBufferSource();
       source.buffer = buffer;
       source.connect(this.playbackGain!);
-      source.start(this.nextPlayTime!);
+      
+      // CRITICAL: Use the provided scheduledTime (not nextPlayTime which may have advanced)
+      // Ensure scheduledTime is at least 5ms in the future
+      const actualStartTime = Math.max(scheduledTime, this.audioContext.currentTime + 0.005);
+      source.start(actualStartTime);
 
       // Track scheduled source for cleanup
       this.scheduledSources.add(source);
-      this.packetsPlayedCount++; // Track played packets
+      this.packetsPlayedCount++; // CRITICAL: Increment when scheduled, not when ended
+      
+      // Log first few scheduled packets for debugging
+      if (this.packetsPlayedCount <= 5) {
+        console.log(`[Voice Gateway] ✅ Scheduled packet #${this.packetsPlayedCount} for playback at t=${actualStartTime.toFixed(3)}s (currentTime=${this.audioContext.currentTime.toFixed(3)}s)`);
+      }
 
       // Clean up when source ends
       source.onended = () => {
@@ -1094,19 +1210,60 @@ export class VoiceGatewayService {
   }
 
   /**
+   * Check connection health and reconnect if needed
+   */
+  private checkConnectionHealth(): void {
+    if (!this.ws || !this.callId || !this.userId) {
+      return;
+    }
+    
+    const now = Date.now();
+    const timeSinceLastMessage = now - this.lastMessageTime;
+    const wsState = this.ws.readyState;
+    
+    // If WebSocket is not open, try to reconnect
+    if (wsState !== WebSocket.OPEN) {
+      console.warn(`[Voice Gateway] ⚠️ Connection health check failed: WebSocket state is ${wsState} (expected OPEN=1)`);
+      if (this.shouldReconnect && !this.isReconnecting) {
+        console.log(`[Voice Gateway] 🔄 Triggering reconnection due to unhealthy connection state`);
+        this.scheduleReconnect();
+      }
+      return;
+    }
+    
+    // If we haven't received any messages in 20 seconds, the connection might be dead
+    // (Note: ping/pong is handled automatically by the browser, but we check for actual data)
+    if (timeSinceLastMessage > 20000 && this.lastMessageTime > 0) {
+      console.warn(`[Voice Gateway] ⚠️ Connection health check: No messages received in ${timeSinceLastMessage}ms`);
+      // Don't reconnect immediately - might just be a quiet period
+      // But log it for debugging
+    }
+  }
+  
+  /**
    * Cleanup playback state
    */
   private cleanupPlayback(): void {
-    // Stop scheduler
+    // Stop scheduler (both interval and animation frame)
     if (this.playbackSchedulerInterval) {
       clearInterval(this.playbackSchedulerInterval);
       this.playbackSchedulerInterval = null;
+    }
+    if (this.scheduleAnimationFrame) {
+      cancelAnimationFrame(this.scheduleAnimationFrame);
+      this.scheduleAnimationFrame = null;
     }
     
     // Stop stats logging
     if (this.statsLogInterval) {
       clearInterval(this.statsLogInterval);
       this.statsLogInterval = null;
+    }
+    
+    // Stop health check
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
     }
     
     // Stop all scheduled sources
@@ -1171,15 +1328,27 @@ export class VoiceGatewayService {
     const audioCtxState = this.audioContext ? this.audioContext.state : 'null';
     
     // Calculate scheduledAheadMs (how far ahead we're scheduling)
+    // CRITICAL: This should be positive (scheduling ahead) or small negative (caught up)
     let scheduledAheadMs = 0;
     if (this.audioContext && this.nextPlayTime !== null) {
       const aheadSeconds = this.nextPlayTime - this.audioContext.currentTime;
       scheduledAheadMs = Math.round(aheadSeconds * 1000);
+      
+      // Warn if scheduledAheadMs is very negative (scheduler is broken)
+      if (scheduledAheadMs < -100) {
+        console.error(`[Voice Gateway] ❌ CRITICAL: scheduledAheadMs is ${scheduledAheadMs}ms (very negative - scheduler is broken!)`);
+        console.error(`[Voice Gateway] ❌ nextPlayTime=${this.nextPlayTime}, currentTime=${this.audioContext.currentTime}, diff=${(this.audioContext.currentTime - this.nextPlayTime) * 1000}ms`);
+      }
     }
     
     // DIAGNOSTIC: Comprehensive stats logging
     const stats = this.getCurrentStats();
-    console.log(`[Voice Gateway] 📊 Stats: sent/sec=${stats.packetsSentPerSec}, recv/sec=${stats.packetsRecvPerSec}, played/sec=${stats.packetsPlayedPerSec}, bufferDepth=${this.jitterBuffer.size}, scheduledAheadMs=${scheduledAheadMs}, playing=${this.isPlaying}, schedulingPaused=${this.isSchedulingPaused}, audioCtx.state=${audioCtxState}, micMuted=${this.isMicMuted}, speakerMuted=${this.isSpeakerMuted}`);
+    console.log(`[Voice Gateway] 📊 Stats: sent/sec=${stats.packetsSentPerSec}, recv/sec=${stats.packetsRecvPerSec}, played/sec=${stats.packetsPlayedPerSec}, bufferDepth=${this.jitterBuffer.size}, scheduledAheadMs=${scheduledAheadMs}, playing=${this.isPlaying}, schedulingPaused=${this.isSchedulingPaused}, audioCtx.state=${audioCtxState}, micMuted=${this.isMicMuted}, speakerMuted=${this.isSpeakerMuted}, nextPlaybackSeq=${this.nextPlaybackSeq}`);
+    
+    // CRITICAL: Warn if played/sec is 0 but buffer is full (scheduler not working)
+    if (stats.packetsPlayedPerSec === 0 && this.jitterBuffer.size >= MIN_BUFFER_PACKETS && this.isPlaying) {
+      console.error(`[Voice Gateway] ❌ CRITICAL: played/sec=0 but buffer is full (${this.jitterBuffer.size} packets) - scheduler is NOT scheduling audio!`);
+    }
   }
 
   /**

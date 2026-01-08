@@ -1,6 +1,7 @@
 import { Component, inject, OnInit, ViewChild, ElementRef, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router, RouterModule } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { EmergencyService, EmergencyContactUser } from '../core/services/emergency.service';
 import { PanicService } from '../core/services/panic.service';
@@ -17,7 +18,7 @@ import { environment } from '../../environments/environment';
 @Component({
   selector: 'app-panic',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, RouterModule],
   template: `
     <div class="panic-container">
       <div class="container">
@@ -61,6 +62,15 @@ import { environment } from '../../environments/environment';
             >
               <span class="icon">👥</span>
               <span>Alert All Contacts</span>
+            </button>
+
+            <button
+              class="mode-btn walkie-talkie-mode"
+              (click)="openWalkieTalkie()"
+              [disabled]="isTriggering"
+            >
+              <span class="icon">📻</span>
+              <span>Walkie-Talkie</span>
             </button>
           </div>
 
@@ -333,6 +343,10 @@ import { environment } from '../../environments/environment';
     .mode-btn.group-mode:hover:not(:disabled) {
       border-color: #8b5cf6;
       background: rgba(139, 92, 246, 0.1);
+    }
+    .mode-btn.walkie-talkie-mode:hover:not(:disabled) {
+      border-color: #10b981;
+      background: rgba(16, 185, 129, 0.1);
     }
     .icon {
       font-size: 1.5rem;
@@ -1323,6 +1337,7 @@ export class PanicComponent implements OnInit, OnDestroy {
   private panicCallService = inject(PanicCallService);
   private audioCommService = inject(AudioCommunicationService);
   private voiceGatewayService = inject(VoiceGatewayService);
+  private router = inject(Router);
   private cdr = inject(ChangeDetectorRef);
 
   message = '';
@@ -2414,11 +2429,32 @@ export class PanicComponent implements OnInit, OnDestroy {
       // Send accept signal
       await this.panicCallService.sendCallAccept(this.currentCallId, this.incomingCall.fromUserId);
       
-      // Initialize audio communication with Web PubSub (callee)
-      await this.audioCommService.initialize(currentUser.id, this.incomingCall.fromUserId);
+      // CRITICAL: Initialize audio communication with Voice Gateway (callee)
+      // This connects to the Voice Gateway with the same callId format as the caller
+      console.log('[Testing Talk] Step 1: Initializing audio communication for callee...');
+      console.log('[Testing Talk] Callee userId:', currentUser.id, ', Caller userId:', this.incomingCall.fromUserId);
       
-      // Start recording automatically when accepting call
-      await this.audioCommService.startRecording();
+      try {
+        await this.audioCommService.initialize(currentUser.id, this.incomingCall.fromUserId);
+        console.log('[Testing Talk] ✅ Audio communication initialized');
+        
+        // Wait a moment for connection to stabilize
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        // Verify connection is ready
+        const state = this.audioCommService.getState();
+        if (!state.isConnected) {
+          throw new Error('Audio connection not ready after initialization');
+        }
+        
+        // Start recording automatically when accepting call
+        console.log('[Testing Talk] Step 2: Starting recording...');
+        await this.audioCommService.startRecording();
+        console.log('[Testing Talk] ✅ Recording started');
+      } catch (error: any) {
+        console.error('[Testing Talk] ❌ Error initializing audio:', error);
+        throw error; // Re-throw to be caught by outer try-catch
+      }
       
       this.toastService.show(`Connected to ${this.incomingCall.fromName}`, 'success');
       console.log('[Testing Talk] Incoming call accepted');
@@ -2684,6 +2720,11 @@ export class PanicComponent implements OnInit, OnDestroy {
     if (!this.testSelectedContactId) return 'Unknown';
     const contact = this.contacts.find(c => c.id === this.testSelectedContactId);
     return contact?.username || 'Unknown';
+  }
+
+  openWalkieTalkie(): void {
+    // Navigate to walkie-talkie page
+    this.router.navigate(['/walkie-talkie']);
   }
 }
 

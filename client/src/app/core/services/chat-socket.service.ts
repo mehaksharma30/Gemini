@@ -32,8 +32,7 @@ export class ChatSocketService {
     // Socket.IO connects to the base server URL, not /api
     const baseUrl = environment.apiUrl.replace(/\/api\/?$/, '');
     
-    // CRITICAL: Explicitly configure Socket.IO to use /socket.io path
-    // This ensures it doesn't conflict with /voice-gateway WebSocket endpoint
+    // Socket.IO configuration - prioritize WebSocket first
     this.socket = io(baseUrl, {
       // CRITICAL: Explicit path for Socket.IO (must match server configuration)
       path: '/socket.io',
@@ -43,39 +42,53 @@ export class ChatSocketService {
       auth: {
         token,
       },
-      // CRITICAL: Enable reconnection with exponential backoff
+      transports: ['websocket', 'polling'], // CRITICAL: Try WebSocket first, fallback to polling
+      upgrade: true,
+      rememberUpgrade: true, // Remember successful WebSocket upgrade for future connections
+      // Azure Web Apps require longer timeouts for WebSocket upgrades
+      timeout: 20000, // 20 seconds (default is 20s, but explicit for Azure)
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      reconnectionAttempts: Infinity,
-      // CRITICAL: Timeout for connection attempts
-      timeout: 20000,
-      // CRITICAL: Force new connection (don't reuse existing)
+      reconnectionAttempts: 5,
       forceNew: false,
-      // CRITICAL: Enable upgrade (websocket preferred, fallback to polling)
-      upgrade: true,
-      // CRITICAL: Don't use withCredentials unless backend requires cookies
-      // (Bearer token auth doesn't need cookies)
+      // Disable compression to avoid frame header issues on Azure
+      // perMessageDeflate is not a valid Socket.IO client option - removed
+      // Force WebSocket connection (if available)
+      forceBase64: false, // Use binary WebSocket frames (not base64)
     });
 
     console.log(`[ChatSocket] Connecting to Socket.IO at: ${baseUrl}/socket.io`);
 
     this.socket.on('connect', () => {
-      console.log('[ChatSocket] ✅ Socket.IO connected');
-      console.log(`[ChatSocket] Socket ID: ${this.socket?.id}`);
-      console.log(`[ChatSocket] Transport: ${this.socket?.io.engine.transport.name}`);
+      console.log('[ChatSocket] ✅ Socket.IO connected successfully');
+      console.log('[ChatSocket] Transport:', this.socket?.io.engine.transport.name);
       this.connectedSubject.next(true);
     });
 
     this.socket.on('disconnect', (reason: string) => {
-      console.log(`[ChatSocket] Socket.IO disconnected: ${reason}`);
+      console.log('[ChatSocket] ⚠️ Socket.IO disconnected:', reason);
       this.connectedSubject.next(false);
     });
 
+    // Handle connection errors (including "Invalid frame header")
     this.socket.on('connect_error', (error: Error) => {
-      console.error('[ChatSocket] ❌ Socket.IO connection error:', error.message);
-      this.connectedSubject.next(false);
+      console.error('[ChatSocket] ❌ Connection error:', error.message);
+      console.error('[ChatSocket] Error details:', {
+        message: error.message,
+        type: error.constructor.name,
+        stack: error.stack,
+      });
+      
+      // If it's a frame header error, log Azure-specific guidance
+      if (error.message.includes('frame header') || error.message.includes('Invalid')) {
+        console.warn('[ChatSocket] ⚠️ This may be an Azure Web Apps WebSocket issue.');
+        console.warn('[ChatSocket] ⚠️ Ensure WebSocket is enabled in Azure App Service configuration.');
+      }
     });
+
+    // Note: Transport upgrade logging removed - 'upgrade' event not available in Socket.IO client API
+    // Transport will automatically upgrade from polling to websocket when available
 
     this.socket.on('dm:message', (message: DirectMessage) => {
       console.log('[ChatSocket] Received DM:', message);
