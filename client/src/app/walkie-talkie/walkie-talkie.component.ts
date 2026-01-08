@@ -494,4 +494,21 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
     }
     return 0;
   }
+
+  /**
+   * Scroll to bottom of messages
+   */
+  scrollToBottom(): void {
+    const container = document.querySelector('.messages-container');
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }
+
+  /**
+   * Check if audio is currently playing
+   */
+  isAudioPlaying(): boolean {
+    return this.currentAudioPlayer !== null && !this.currentAudioPlayer.paused;
+  }
 }
