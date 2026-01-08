@@ -411,18 +411,44 @@ export const getAudio = async (req: Request, res: Response): Promise<void> => {
 
     // Determine content type based on file extension
     const ext = path.extname(audioPath).toLowerCase();
-    let contentType = 'audio/mpeg';
+    let contentType = 'audio/webm'; // Default to webm (browser default)
     if (ext === '.wav') {
       contentType = 'audio/wav';
     } else if (ext === '.m4a' || ext === '.mp4') {
       contentType = 'audio/mp4';
+    } else if (ext === '.webm') {
+      contentType = 'audio/webm';
+    } else if (ext === '.mp3' || ext === '.mpeg') {
+      contentType = 'audio/mpeg';
     }
+
+    console.log('[WalkieTalkie] Serving audio:', {
+      messageId,
+      audioPath,
+      contentType,
+      ext,
+      fileExists: fs.existsSync(audioPath),
+    });
 
     // Set headers and stream file
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `inline; filename="${path.basename(audioPath)}"`);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    
+    // Get file stats for content length
+    const stats = fs.statSync(audioPath);
+    res.setHeader('Content-Length', stats.size);
     
     const fileStream = fs.createReadStream(audioPath);
+    
+    fileStream.on('error', (err) => {
+      console.error('[WalkieTalkie] Error streaming audio file:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Error streaming audio file' });
+      }
+    });
+    
     fileStream.pipe(res);
 
   } catch (error: any) {

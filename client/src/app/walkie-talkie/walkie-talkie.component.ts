@@ -183,8 +183,10 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
         // Auto-play new messages from the other user
         for (const msg of response.messages) {
           if (msg.toUserId === this.currentUserId) {
-            // This message is for us, auto-play it
-            this.playAudio(msg.audioUrl);
+            // This message is for us, auto-play it (don't await - let it play in background)
+            this.playAudio(msg.audioUrl).catch(err => {
+              console.error('[WalkieTalkie] Auto-play error:', err);
+            });
           }
         }
       }
@@ -342,42 +344,89 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
   /**
    * Play audio from URL
    */
-  playAudio(audioUrl: string): void {
+  async playAudio(audioUrl: string): Promise<void> {
     // Stop current audio if playing
     this.cleanupAudioPlayer();
 
-    // Get full audio URL
-    const messageId = audioUrl.split('/').pop();
+    // Extract messageId from audioUrl
+    // audioUrl can be either "/api/wt/audio/msg_..." or just "msg_..."
+    let messageId: string;
+    if (audioUrl.startsWith('/api/wt/audio/')) {
+      messageId = audioUrl.replace('/api/wt/audio/', '');
+    } else if (audioUrl.includes('/')) {
+      messageId = audioUrl.split('/').pop() || audioUrl;
+    } else {
+      messageId = audioUrl;
+    }
+
     if (!messageId) {
+      console.error('[WalkieTalkie] Invalid audio URL:', audioUrl);
       return;
     }
 
-    const fullUrl = this.walkieTalkieService.getAudioUrl(messageId);
-    const audio = new Audio(fullUrl);
+    try {
+      const token = this.authService.getToken();
+      if (!token) {
+        this.toastService.show('Not authenticated', 'error');
+        return;
+      }
 
-    // Add auth token to request
-    const token = this.authService.getToken();
-    if (token) {
-      // Note: Audio element doesn't support custom headers directly
-      // The server should accept the auth token from cookies or we need to use fetch
-      // For now, we'll rely on the server checking the session/cookie
+      // Fetch audio with auth token
+      const fullUrl = this.walkieTalkieService.getAudioUrl(messageId);
+      console.log('[WalkieTalkie] Fetching audio from:', fullUrl, 'messageId:', messageId);
+
+      const response = await fetch(fullUrl, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch audio: ${response.status} ${response.statusText}`);
+      }
+
+      // Get audio blob
+      const audioBlob = await response.blob();
+      console.log('[WalkieTalkie] Audio blob received:', {
+        size: audioBlob.size,
+        type: audioBlob.type,
+      });
+
+      if (audioBlob.size === 0) {
+        throw new Error('Received empty audio file');
+      }
+
+      // Create object URL from blob
+      const blobUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(blobUrl);
+
+      audio.onended = () => {
+        URL.revokeObjectURL(blobUrl);
+        this.cleanupAudioPlayer();
+      };
+
+      audio.onerror = (error) => {
+        console.error('[WalkieTalkie] Error playing audio:', error);
+        console.error('[WalkieTalkie] Audio error details:', {
+          code: audio.error?.code,
+          message: audio.error?.message,
+        });
+        URL.revokeObjectURL(blobUrl);
+        this.toastService.show('Failed to play audio', 'error');
+        this.cleanupAudioPlayer();
+      };
+
+      this.currentAudioPlayer = audio;
+      await audio.play();
+      console.log('[WalkieTalkie] Audio playback started');
+    } catch (error: any) {
+      console.error('[WalkieTalkie] Error loading/playing audio:', error);
+      this.toastService.show(
+        error.message || 'Failed to play audio',
+        'error'
+      );
+      this.cleanupAudioPlayer();
     }
-
-    audio.onended = () => {
-      this.cleanupAudioPlayer();
-    };
-
-    audio.onerror = (error) => {
-      console.error('[WalkieTalkie] Error playing audio:', error);
-      this.toastService.show('Failed to play audio', 'error');
-      this.cleanupAudioPlayer();
-    };
-
-    this.currentAudioPlayer = audio;
-    audio.play().catch((error) => {
-      console.error('[WalkieTalkie] Error playing audio:', error);
-      this.toastService.show('Failed to play audio', 'error');
-    });
   }
 
   /**
