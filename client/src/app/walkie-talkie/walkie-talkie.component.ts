@@ -44,8 +44,8 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
   private audioChunks: Blob[] = [];
   private recordingStream?: MediaStream;
 
-  // Audio playback
-  private currentAudioPlayer: HTMLAudioElement | null = null;
+  // Audio playback (public for template access)
+  currentAudioPlayer: HTMLAudioElement | null = null;
 
   ngOnInit(): void {
     const currentUser = this.authService.currentUser();
@@ -149,9 +149,9 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Stop polling
+   * Stop polling (public for template access)
    */
-  private stopPolling(): void {
+  stopPolling(): void {
     if (this.pollSubscription) {
       this.pollSubscription.unsubscribe();
       this.pollSubscription = undefined;
