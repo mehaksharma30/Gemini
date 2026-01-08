@@ -856,11 +856,9 @@ export class VoiceGatewayService {
       this.isSchedulingPaused = false;
       console.log(`[Voice Gateway] Starting playback after unmute from seq ${this.nextPlaybackSeq} (buffer: ${this.jitterBuffer.size} packets)`);
       
-      // Start scheduler if not running
-      if (!this.playbackSchedulerInterval) {
-        this.playbackSchedulerInterval = setInterval(() => {
-          this.scheduleNextPacket();
-        }, FRAME_DURATION_MS);
+      // Start scheduler if not running (use requestAnimationFrame loop)
+      if (!this.scheduleAnimationFrame) {
+        this.startSchedulingLoop();
       }
     } else if (this.isPlaying && this.isSchedulingPaused && this.jitterBuffer.size >= LOW_BUFFER_THRESHOLD) {
       // Resume scheduling if it was paused (but don't reset state)

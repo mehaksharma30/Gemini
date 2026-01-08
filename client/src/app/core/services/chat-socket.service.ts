@@ -47,7 +47,7 @@ export class ChatSocketService {
       reconnectionAttempts: 5,
       forceNew: false,
       // Disable compression to avoid frame header issues on Azure
-      perMessageDeflate: false,
+      // perMessageDeflate is not a valid Socket.IO client option - removed
       // Force WebSocket connection (if available)
       forceBase64: false, // Use binary WebSocket frames (not base64)
     });
@@ -79,10 +79,8 @@ export class ChatSocketService {
       }
     });
 
-    // Handle transport upgrade
-    this.socket.io.on('upgrade', () => {
-      console.log('[ChatSocket] 🔄 Transport upgraded to:', this.socket?.io.engine.transport.name);
-    });
+    // Note: Transport upgrade logging removed - 'upgrade' event not available in Socket.IO client API
+    // Transport will automatically upgrade from polling to websocket when available
 
     this.socket.on('dm:message', (message: DirectMessage) => {
       console.log('Received DM:', message);
