@@ -1,88 +1,90 @@
 <div class="walkie-talkie-container">
   <div class="header">
     <h1>Walkie-Talkie</h1>
-    <p class="subtitle">Turn-based voice messaging</p>
+    <p class="subtitle">User-to-user voice messaging</p>
   </div>
 
-  <div class="messages-container" #messagesContainer>
-    <div *ngIf="messages.length === 0" class="empty-state">
-      <p>Start a conversation by sending a message or recording audio.</p>
+  <!-- Contact Selection -->
+  <div class="contact-selection" *ngIf="!selectedContactId">
+    <h2>Select a contact to talk to:</h2>
+    <div class="contacts-list" *ngIf="contacts.length > 0">
+      <button
+        *ngFor="let contact of contacts"
+        (click)="selectContact(contact.id)"
+        class="contact-btn"
+        type="button"
+      >
+        <span class="contact-name">{{ contact.username }}</span>
+      </button>
+    </div>
+    <div *ngIf="contacts.length === 0" class="empty-contacts">
+      <p>No contacts available. Add emergency contacts to use walkie-talkie.</p>
+    </div>
+  </div>
+
+  <!-- Conversation View -->
+  <div class="conversation-view" *ngIf="selectedContactId && selectedContact">
+    <div class="conversation-header">
+      <button (click)="selectedContactId = null; stopPolling(); messages = []; threadId = null" class="back-btn" type="button">
+        ← Back
+      </button>
+      <h2>{{ selectedContact.username }}</h2>
     </div>
 
-    <div *ngFor="let message of messages" class="message" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'">
-      <div class="message-content">
-        <div class="message-header">
-          <span class="role">{{ message.role === 'user' ? 'You' : 'AI' }}</span>
-          <span class="timestamp">{{ formatTime(message.createdAt) }}</span>
+    <!-- Messages -->
+    <div class="messages-container" #messagesContainer>
+      <div *ngIf="messages.length === 0" class="empty-state">
+        <p>No messages yet. Start by recording a voice message!</p>
+      </div>
+
+      <div *ngFor="let message of messages" class="message" [class.sent]="isFromCurrentUser(message)" [class.received]="!isFromCurrentUser(message)">
+        <div class="message-content">
+          <div class="message-header">
+            <span class="sender">{{ isFromCurrentUser(message) ? 'You' : selectedContact.username }}</span>
+            <span class="timestamp">{{ formatTime(message.createdAt) }}</span>
+          </div>
+          <button 
+            class="play-audio-btn" 
+            (click)="playAudio(message.audioUrl)"
+            [disabled]="currentAudioPlayer && !currentAudioPlayer.paused"
+            type="button"
+          >
+            {{ currentAudioPlayer && !currentAudioPlayer.paused ? '⏸️ Playing...' : '▶️ Play Audio' }}
+          </button>
         </div>
-        <div class="message-text">{{ message.text }}</div>
-        <button 
-          *ngIf="message.audioUrl" 
-          class="play-audio-btn" 
-          (click)="playAudio(message.audioUrl!)"
+      </div>
+    </div>
+
+    <!-- Recording Controls -->
+    <div class="input-container">
+      <div class="recording-status" *ngIf="isRecording">
+        <span class="recording-indicator">🔴 Recording...</span>
+        <span class="recording-duration">{{ getRecordingDuration() }}s</span>
+      </div>
+
+      <div class="audio-controls">
+        <button
+          *ngIf="!isRecording"
+          (click)="startRecording()"
+          [disabled]="isSending"
+          class="record-btn"
           type="button"
         >
-          🔊 Play Audio
+          🎤 Record (3-10s)
         </button>
+        <button
+          *ngIf="isRecording"
+          (click)="stopRecording()"
+          class="stop-btn"
+          type="button"
+        >
+          ⏹️ Stop & Send
+        </button>
+      </div>
+
+      <div *ngIf="isSending" class="sending-status">
+        <span>Sending...</span>
       </div>
     </div>
   </div>
-
-  <div class="input-container">
-    <div class="text-input-group">
-      <input
-        type="text"
-        [(ngModel)]="textInput"
-        (keyup.enter)="sendTextMessage()"
-        placeholder="Type a message..."
-        [disabled]="isSending || isRecording"
-        class="text-input"
-      />
-      <button
-        (click)="sendTextMessage()"
-        [disabled]="!textInput.trim() || isSending || isRecording"
-        class="send-btn"
-        type="button"
-      >
-        Send
-      </button>
-    </div>
-
-    <div class="audio-controls">
-      <button
-        *ngIf="!isRecording"
-        (click)="startRecording()"
-        [disabled]="isSending || isEmergencySending"
-        class="record-btn"
-        type="button"
-      >
-        🎤 Record Audio
-      </button>
-      <button
-        *ngIf="isRecording"
-        (click)="stopRecording()"
-        class="stop-btn"
-        type="button"
-      >
-        ⏹️ Stop Recording
-      </button>
-    </div>
-
-    <div class="emergency-container">
-      <button
-        (click)="sendEmergency()"
-        [disabled]="isSending || isRecording || isEmergencySending"
-        class="emergency-btn"
-        type="button"
-      >
-        🚨 Emergency
-      </button>
-      <span *ngIf="isEmergencySending" class="emergency-status">Sending emergency...</span>
-    </div>
-
-    <div *ngIf="isSending" class="sending-status">
-      <span>Sending...</span>
-    </div>
-  </div>
 </div>
-

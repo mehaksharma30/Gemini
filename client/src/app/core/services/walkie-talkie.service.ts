@@ -1,12 +1,11 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Observable, interval } from 'rxjs';
-import { map, switchMap } from 'rxjs/operators';
+import { Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import {
-  WalkieTalkieResponse,
   WalkieTalkieThread,
-  EmergencyResponse,
+  SendMessageResponse,
+  PollMessagesResponse,
 } from '../models/walkie-talkie.model';
 import { AuthService } from './auth.service';
 
@@ -19,44 +18,37 @@ export class WalkieTalkieService {
   private apiUrl = environment.apiUrl;
 
   /**
-   * Send a text message to walkie-talkie API
+   * Send an audio message from one user to another
+   * @param fromUserId Sender user ID
+   * @param toUserId Receiver user ID
+   * @param audioFile Audio file to upload
+   * @param threadId Optional thread ID (will be generated if not provided)
+   * @param clientTimestamp Optional client-side timestamp
+   * @returns Observable<SendMessageResponse>
    */
-  sendTextMessage(text: string, threadId?: string): Observable<WalkieTalkieResponse> {
-    const token = this.authService.getToken();
-    if (!token) {
-      throw new Error('Not authenticated');
-    }
-
-    const headers = new HttpHeaders({
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    });
-
-    const body: any = { text };
-    if (threadId) {
-      body.threadId = threadId;
-    }
-
-    return this.http.post<WalkieTalkieResponse>(
-      `${this.apiUrl}/wt/message`,
-      body,
-      { headers }
-    );
-  }
-
-  /**
-   * Send an audio file to walkie-talkie API
-   */
-  sendAudioMessage(audioFile: File, threadId?: string): Observable<WalkieTalkieResponse> {
+  sendMessage(
+    fromUserId: string,
+    toUserId: string,
+    audioFile: File,
+    threadId?: string,
+    clientTimestamp?: number
+  ): Observable<SendMessageResponse> {
     const token = this.authService.getToken();
     if (!token) {
       throw new Error('Not authenticated');
     }
 
     const formData = new FormData();
-    formData.append('audio', audioFile);
+    formData.append('fromUserId', fromUserId);
+    formData.append('toUserId', toUserId);
+    formData.append('audio', audioFile, audioFile.name);
+    
     if (threadId) {
       formData.append('threadId', threadId);
+    }
+    
+    if (clientTimestamp !== undefined) {
+      formData.append('clientTimestamp', clientTimestamp.toString());
     }
 
     const headers = new HttpHeaders({
@@ -64,40 +56,20 @@ export class WalkieTalkieService {
       // Don't set Content-Type - let browser set it with boundary for multipart/form-data
     });
 
-    return this.http.post<WalkieTalkieResponse>(
-      `${this.apiUrl}/wt/message`,
+    return this.http.post<SendMessageResponse>(
+      `${this.apiUrl}/wt/send`,
       formData,
       { headers }
     );
   }
 
   /**
-   * Send an emergency audio clip
+   * Get thread between two users (all messages)
+   * @param userA First user ID
+   * @param userB Second user ID
+   * @returns Observable<WalkieTalkieThread>
    */
-  sendEmergency(audioFile: File): Observable<EmergencyResponse> {
-    const token = this.authService.getToken();
-    if (!token) {
-      throw new Error('Not authenticated');
-    }
-
-    const formData = new FormData();
-    formData.append('audio', audioFile);
-
-    const headers = new HttpHeaders({
-      'Authorization': `Bearer ${token}`,
-    });
-
-    return this.http.post<EmergencyResponse>(
-      `${this.apiUrl}/wt/emergency`,
-      formData,
-      { headers }
-    );
-  }
-
-  /**
-   * Get thread messages
-   */
-  getThread(threadId: string): Observable<WalkieTalkieThread> {
+  getThread(userA: string, userB: string): Observable<WalkieTalkieThread> {
     const token = this.authService.getToken();
     if (!token) {
       throw new Error('Not authenticated');
@@ -108,18 +80,47 @@ export class WalkieTalkieService {
     });
 
     return this.http.get<WalkieTalkieThread>(
-      `${this.apiUrl}/wt/thread/${threadId}`,
+      `${this.apiUrl}/wt/thread?userA=${userA}&userB=${userB}`,
       { headers }
     );
   }
 
   /**
-   * Poll thread messages every 1-2 seconds
+   * Poll for new messages in a thread
+   * @param threadId Thread ID
+   * @param after Optional timestamp or messageId to get messages after
+   * @returns Observable<PollMessagesResponse>
    */
-  pollThread(threadId: string, intervalMs: number = 1500): Observable<WalkieTalkieThread> {
-    return interval(intervalMs).pipe(
-      switchMap(() => this.getThread(threadId))
-    );
+  pollMessages(threadId: string, after?: string): Observable<PollMessagesResponse> {
+    const token = this.authService.getToken();
+    if (!token) {
+      throw new Error('Not authenticated');
+    }
+
+    const headers = new HttpHeaders({
+      'Authorization': `Bearer ${token}`,
+    });
+
+    let url = `${this.apiUrl}/wt/poll?threadId=${threadId}`;
+    if (after) {
+      url += `&after=${encodeURIComponent(after)}`;
+    }
+
+    return this.http.get<PollMessagesResponse>(url, { headers });
+  }
+
+  /**
+   * Get audio URL for a message
+   * @param messageId Message ID
+   * @returns Audio URL
+   */
+  getAudioUrl(messageId: string): string {
+    const token = this.authService.getToken();
+    if (!token) {
+      throw new Error('Not authenticated');
+    }
+    
+    // Return the API endpoint URL - the browser will use the auth token from the request
+    return `${this.apiUrl}/wt/audio/${messageId}`;
   }
 }
-

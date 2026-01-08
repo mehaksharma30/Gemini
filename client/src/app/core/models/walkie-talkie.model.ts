@@ -1,8 +1,14 @@
+/**
+ * Walkie-Talkie Models (User-to-User Voice Messaging)
+ * NO AI - Pure user-to-user communication
+ */
+
 export interface WalkieTalkieMessage {
-  role: 'user' | 'assistant';
-  text: string;
-  audioUrl?: string;
-  createdAt: string;
+  messageId: string;
+  fromUserId: string;
+  toUserId: string;
+  audioUrl: string;
+  createdAt: string; // ISO timestamp
 }
 
 export interface WalkieTalkieThread {
@@ -10,18 +16,13 @@ export interface WalkieTalkieThread {
   messages: WalkieTalkieMessage[];
 }
 
-export interface WalkieTalkieResponse {
+export interface SendMessageResponse {
   threadId: string;
-  transcript: string;
-  responseText: string;
-  ttsAudioUrl?: string;
+  messageId: string;
+  createdAt: string; // ISO timestamp
+  audioUrl: string;
 }
 
-export interface EmergencyResponse {
-  success: boolean;
-  transcript: string;
-  responseText: string;
-  notificationsSent: number;
-  incidentId: string;
+export interface PollMessagesResponse {
+  messages: WalkieTalkieMessage[];
 }
-

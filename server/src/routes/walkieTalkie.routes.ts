@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import path from 'path';
 import { authMiddleware } from '../middleware/auth.middleware';
-import { sendMessage, sendEmergency, getThread } from '../controllers/walkieTalkie.controller';
+import { sendMessage, getThread, pollMessages, getAudio } from '../controllers/walkieTalkie.controller';
 
 const router = Router();
 
@@ -10,6 +10,10 @@ const router = Router();
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, '..', '..', 'uploads');
+    // Ensure directory exists
+    if (!require('fs').existsSync(uploadDir)) {
+      require('fs').mkdirSync(uploadDir, { recursive: true });
+    }
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
@@ -51,29 +55,22 @@ const upload = multer({
   },
 });
 
-// POST /api/wt/message
-// Accept audio (multipart/form-data) or text (JSON)
-// Handle both Content-Types properly
-router.post('/message', authMiddleware, (req, res, next) => {
-  const contentType = req.headers['content-type'] || '';
-  
-  // If JSON, skip multer (Express will parse JSON)
-  if (contentType.includes('application/json')) {
-    req.file = undefined;
-    next();
-  } else {
-    // If multipart, use multer
-    upload.single('audio')(req, res, next);
-  }
-}, sendMessage);
+// POST /api/wt/send
+// Upload audio message from one user to another
+// Body: multipart/form-data with fromUserId, toUserId, threadId (optional), clientTimestamp (optional), audio (file)
+router.post('/send', authMiddleware, upload.single('audio'), sendMessage);
 
-// POST /api/wt/emergency
-// Accept audio (multipart/form-data)
-router.post('/emergency', authMiddleware, upload.single('audio'), sendEmergency);
+// GET /api/wt/thread?userA=<id>&userB=<id>
+// Get thread between two users (all messages)
+router.get('/thread', authMiddleware, getThread);
 
-// GET /api/wt/thread/:threadId
-// Get message history for a thread
-router.get('/thread/:threadId', authMiddleware, getThread);
+// GET /api/wt/poll?threadId=<id>&after=<timestamp or messageId>
+// Get new messages in a thread after a specific timestamp or messageId
+router.get('/poll', authMiddleware, pollMessages);
+
+// GET /api/wt/audio/:messageId
+// Serve audio file for a message
+router.get('/audio/:messageId', authMiddleware, getAudio);
 
 export default router;
 

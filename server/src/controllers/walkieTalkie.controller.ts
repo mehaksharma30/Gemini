@@ -3,89 +3,41 @@ import mongoose from 'mongoose';
 import fs from 'fs';
 import path from 'path';
 import WalkieTalkieMessage from '../models/WalkieTalkieMessage';
-import Post from '../models/Post';
-import EmergencyContacts from '../models/EmergencyContacts';
-import PanicAlert from '../models/PanicAlert';
-import PanicIncident from '../models/PanicIncident';
-import User from '../models/User';
-import { speechToText } from '../services/azureSpeech.service';
-import { synthesizeToMp3 } from '../services/azureTts.service';
-import { getAIPanicResponse } from '../services/aiPanic.service';
-import { sendEmergencyEmail } from '../services/emailService';
-import { conversationStore } from '../services/aiPanic.service';
 
 /**
- * Generate a unique thread ID for walkie-talkie conversation
+ * Generate a consistent thread ID between two users
+ * Thread ID is deterministic: sorted user IDs joined with underscore
  */
-function generateThreadId(userId: string): string {
-  return `wt_${userId}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+function generateThreadId(userAId: string, userBId: string): string {
+  const sorted = [userAId, userBId].sort();
+  return `wt_${sorted[0]}_${sorted[1]}`;
 }
 
 /**
- * Convert audio file to text using STT
- * Supports WAV (16kHz mono 16-bit) and M4A (will need conversion)
+ * Generate unique message ID
  */
-async function transcribeAudioFile(filePath: string, mimeType: string): Promise<string> {
-  try {
-    // Read audio file
-    const audioBuffer = fs.readFileSync(filePath);
-    
-    // For now, use Azure Speech STT directly
-    // TODO: If M4A, convert to WAV first (requires ffmpeg or similar)
-    // For V1, assume WAV format from watchOS
-    if (mimeType === 'audio/wav' || mimeType === 'audio/x-wav' || filePath.endsWith('.wav')) {
-      // Convert Buffer to ArrayBuffer for Azure Speech SDK
-      const arrayBuffer = audioBuffer.buffer.slice(
-        audioBuffer.byteOffset,
-        audioBuffer.byteOffset + audioBuffer.byteLength
-      );
-      
-      const transcript = await speechToText(arrayBuffer);
-      return transcript;
-    } else if (mimeType === 'audio/m4a' || mimeType === 'audio/mp4' || filePath.endsWith('.m4a')) {
-      // M4A conversion to WAV would go here
-      // For V1, return placeholder or use existing Azure STT API that accepts M4A
-      console.warn('[WalkieTalkie] M4A format detected - conversion not implemented, using Azure STT API directly');
-      
-      // Try Azure STT REST API which may accept M4A
-      const region = process.env.AZURE_SPEECH_REGION || 'eastus';
-      const key = process.env.AZURE_SPEECH_KEY;
-      
-      if (!key) {
-        throw new Error('Azure Speech key not configured');
-      }
-      
-      const url = `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US&format=detailed`;
-      
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Ocp-Apim-Subscription-Key': key,
-          'Content-Type': 'audio/m4a',
-          'Accept': 'application/json',
-        },
-        body: audioBuffer,
-      });
-      
-      const json = await response.json() as { DisplayText?: string; RecognitionStatus?: string };
-      
-      if (json.RecognitionStatus === 'Success' && json.DisplayText) {
-        return json.DisplayText;
-      } else {
-        throw new Error(`STT failed: ${json.RecognitionStatus || 'Unknown error'}`);
-      }
-    } else {
-      throw new Error(`Unsupported audio format: ${mimeType}`);
-    }
-  } catch (error: any) {
-    console.error('[WalkieTalkie] STT error:', error);
-    throw new Error(`Failed to transcribe audio: ${error.message}`);
-  }
+function generateMessageId(): string {
+  return `msg_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
 }
 
 /**
- * POST /api/wt/message
- * Accept audio or text message, transcribe if audio, get AI response, return JSON
+ * POST /api/wt/send
+ * Upload audio message from one user to another
+ * 
+ * Body (multipart/form-data):
+ * - fromUserId: string (required)
+ * - toUserId: string (required)
+ * - threadId: string (optional, will be generated if not provided)
+ * - clientTimestamp: number (optional)
+ * - audio: File (required, wav or m4a)
+ * 
+ * Response:
+ * {
+ *   threadId: string,
+ *   messageId: string,
+ *   createdAt: string (ISO),
+ *   audioUrl: string
+ * }
  */
 export const sendMessage = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -94,165 +46,85 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    const userId = req.user.userId;
-    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const authenticatedUserId = req.user.userId;
     
-    // Get threadId from body (create new if not provided)
+    // Get fromUserId and toUserId from request body
+    const fromUserId = req.body.fromUserId as string;
+    const toUserId = req.body.toUserId as string;
     let threadId = req.body.threadId as string | undefined;
-    
-    // Extract text or audio
-    let userText: string | null = null;
-    let audioFilePath: string | null = null;
+    const clientTimestamp = req.body.clientTimestamp ? Number(req.body.clientTimestamp) : undefined;
 
-    // Check if audio file was uploaded
-    if (req.file) {
-      audioFilePath = req.file.path;
-      console.log('[WalkieTalkie] Audio file received:', req.file.originalname, 'size:', req.file.size, 'mime:', req.file.mimetype);
-      
-      try {
-        // Transcribe audio
-        userText = await transcribeAudioFile(req.file.path, req.file.mimetype);
-        console.log('[WalkieTalkie] Transcription:', userText.substring(0, 50) + '...');
-      } catch (sttError: any) {
-        // Cleanup file on error
-        if (audioFilePath) {
-          fs.unlink(audioFilePath, () => {});
-        }
-        console.error('[WalkieTalkie] STT error:', sttError);
-        res.status(400).json({ 
-          error: 'Failed to transcribe audio',
-          details: sttError.message 
-        });
-        return;
-      }
-    } else if (req.body.text && typeof req.body.text === 'string') {
-      // Text message provided directly
-      const textInput = req.body.text.trim();
-      if (textInput.length > 0) {
-        userText = textInput;
-        console.log('[WalkieTalkie] Text message received:', textInput.substring(0, Math.min(50, textInput.length)) + '...');
-      }
-    }
-    
-    // Validate we have either audio transcription or text input
-    // Type narrowing: after this check, userText is guaranteed non-null
-    if (!userText || userText.length === 0) {
-      // Cleanup file if exists
-      if (audioFilePath) {
-        fs.unlink(audioFilePath, () => {});
-      }
-      res.status(400).json({ 
-        error: 'Missing audio or text',
-        details: 'Please provide either an audio file (multipart/form-data field "audio") or text (body field "text")'
-      });
+    // Validate required fields
+    if (!fromUserId || !toUserId) {
+      res.status(400).json({ error: 'Missing fromUserId or toUserId' });
       return;
     }
 
+    // Validate authenticated user is the sender
+    if (fromUserId !== authenticatedUserId) {
+      res.status(403).json({ error: 'You can only send messages as yourself' });
+      return;
+    }
+
+    // Validate user IDs are valid ObjectIds
+    if (!mongoose.Types.ObjectId.isValid(fromUserId) || !mongoose.Types.ObjectId.isValid(toUserId)) {
+      res.status(400).json({ error: 'Invalid user ID format' });
+      return;
+    }
+
+    // Validate users are different
+    if (fromUserId === toUserId) {
+      res.status(400).json({ error: 'Cannot send message to yourself' });
+      return;
+    }
+
+    // Check if audio file was uploaded
+    if (!req.file) {
+      res.status(400).json({ error: 'Missing audio file' });
+      return;
+    }
+
+    console.log('[WalkieTalkie] Audio received:', {
+      fromUserId,
+      toUserId,
+      filename: req.file.originalname,
+      size: req.file.size,
+      mimeType: req.file.mimetype,
+    });
+
     // Generate threadId if not provided
     if (!threadId) {
-      threadId = generateThreadId(userId);
+      threadId = generateThreadId(fromUserId, toUserId);
     }
 
-    // Get conversation history for AI context
-    const history = conversationStore.get(threadId) || [];
-    
-    // Type narrowing: userText is guaranteed non-null after the validation check above
-    const userTextFinal: string = userText!; // Non-null assertion is safe here
-    history.push({ role: 'user', content: userTextFinal });
+    // Generate message ID
+    const messageId = generateMessageId();
 
-    // Save user message to database (userTextFinal is guaranteed non-null)
-    const userMessage = await WalkieTalkieMessage.create({
+    // Store audio file path
+    const audioPath = req.file.path;
+    const audioFilename = path.basename(audioPath);
+    const audioUrl = `/api/wt/audio/${messageId}`;
+
+    // Create message record in database
+    const message = await WalkieTalkieMessage.create({
+      messageId,
       threadId,
-      userId: userObjectId,
-      role: 'user',
-      text: userTextFinal,
-      audioUrl: audioFilePath ? `/uploads/${path.basename(audioFilePath)}` : undefined,
+      fromUserId: new mongoose.Types.ObjectId(fromUserId),
+      toUserId: new mongoose.Types.ObjectId(toUserId),
+      audioUrl,
+      audioPath,
+      clientTimestamp,
       createdAt: new Date(),
     });
 
-    console.log('[WalkieTalkie] User message saved:', userMessage._id);
+    console.log('[WalkieTalkie] Message saved:', messageId);
 
-    // Get user's recent posts for AI context
-    let userPosts: Array<{ title: string; content: string; tags: string[]; createdAt: Date }> = [];
-    try {
-      const posts = await Post.find({ authorId: userObjectId })
-        .sort({ createdAt: -1 })
-        .limit(10)
-        .select('title content tags createdAt')
-        .lean();
-      
-      userPosts = posts.map(post => ({
-        title: post.title,
-        content: post.content,
-        tags: post.tags || [],
-        createdAt: post.createdAt,
-      }));
-    } catch (err) {
-      console.error('[WalkieTalkie] Error fetching user posts:', err);
-    }
-
-    // Get AI response (userTextFinal is guaranteed non-null)
-    let aiResponse: string;
-    try {
-      aiResponse = await getAIPanicResponse(
-        userTextFinal,
-        history.slice(0, -1), // Exclude current message
-        { recentPosts: userPosts },
-        threadId,
-        userId,
-        'en' // Always English
-      );
-      
-      // Add AI response to history
-      history.push({ role: 'assistant', content: aiResponse });
-      conversationStore.set(threadId, history);
-    } catch (aiError: any) {
-      console.error('[WalkieTalkie] AI error:', aiError);
-      aiResponse = "I'm here with you. How can I help right now?";
-    }
-
-    // Generate TTS audio for AI response
-    let ttsAudioUrl: string | undefined = undefined;
-    try {
-      const ttsBuffer = await synthesizeToMp3(aiResponse, 'en');
-      
-      // Save TTS audio to uploads directory
-      const ttsFilename = `tts_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.mp3`;
-      const ttsPath = path.join(__dirname, '..', '..', 'uploads', ttsFilename);
-      
-      // Ensure uploads directory exists
-      const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
-      if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
-      }
-      
-      fs.writeFileSync(ttsPath, ttsBuffer);
-      ttsAudioUrl = `/uploads/${ttsFilename}`;
-      
-      console.log('[WalkieTalkie] TTS audio generated:', ttsAudioUrl);
-    } catch (ttsError: any) {
-      console.error('[WalkieTalkie] TTS error:', ttsError);
-      // Continue without TTS - it's optional
-    }
-
-    // Save AI response to database
-    await WalkieTalkieMessage.create({
-      threadId,
-      userId: userObjectId,
-      role: 'assistant',
-      text: aiResponse,
-      audioUrl: ttsAudioUrl,
-      createdAt: new Date(),
-    });
-
-    console.log('[WalkieTalkie] Response saved for thread:', threadId);
-
-    // Return response (userTextFinal is guaranteed non-null)
+    // Return response
     res.json({
       threadId,
-      transcript: userTextFinal,
-      responseText: aiResponse,
-      ttsAudioUrl,
+      messageId,
+      createdAt: message.createdAt.toISOString(),
+      audioUrl,
     });
 
   } catch (error: any) {
@@ -264,178 +136,33 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
     }
     
     res.status(500).json({
-      error: 'Failed to process message',
+      error: 'Failed to send message',
       details: error.message || 'Unknown error',
     });
   }
 };
 
 /**
- * POST /api/wt/emergency
- * Accept audio clip, transcribe, trigger emergency workflow
- */
-export const sendEmergency = async (req: Request, res: Response): Promise<void> => {
-  try {
-    if (!req.user) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
-    const userId = req.user.userId;
-    const userObjectId = new mongoose.Types.ObjectId(userId);
-    
-    // Check if audio file was uploaded
-    if (!req.file) {
-      res.status(400).json({ error: 'Missing audio file' });
-      return;
-    }
-
-    console.log('[WalkieTalkie] Emergency audio received:', req.file.originalname, 'size:', req.file.size);
-
-    // Transcribe audio
-    let transcript: string;
-    try {
-      transcript = await transcribeAudioFile(req.file.path, req.file.mimetype);
-      console.log('[WalkieTalkie] Emergency transcription:', transcript.substring(0, 50) + '...');
-    } catch (sttError: any) {
-      // Cleanup file on error
-      fs.unlink(req.file.path, () => {});
-      console.error('[WalkieTalkie] Emergency STT error:', sttError);
-      res.status(400).json({ 
-        error: 'Failed to transcribe audio',
-        details: sttError.message 
-      });
-      return;
-    }
-
-    if (!transcript || transcript.length === 0) {
-      fs.unlink(req.file.path, () => {});
-      res.status(400).json({ error: 'No speech detected in audio' });
-      return;
-    }
-
-    // Create panic incident
-    const emergencyContacts = await EmergencyContacts.findOne({ ownerUserId: userObjectId });
-    const contactUserIds = emergencyContacts?.contactUserIds || [];
-
-    const incident = await PanicIncident.create({
-      ownerUserId: userObjectId,
-      mode: contactUserIds.length > 0 ? 'GROUP' : 'AI',
-      message: transcript,
-      targetUserIds: contactUserIds,
-      status: 'OPEN',
-    });
-
-    // Get AI response
-    let aiResponse: string;
-    try {
-      aiResponse = await getAIPanicResponse(
-        transcript,
-        [],
-        {},
-        undefined,
-        userId,
-        'en'
-      );
-    } catch (aiError: any) {
-      console.error('[WalkieTalkie] Emergency AI error:', aiError);
-      aiResponse = "I'm here with you. Let's breathe together—inhale... hold... exhale... You're not alone, and this feeling will pass.";
-    }
-
-    // Notify emergency contacts
-    let notificationsSent = 0;
-    if (contactUserIds.length > 0) {
-      const senderUser = await User.findById(userObjectId).select('username');
-      const senderUsername = senderUser?.username || 'Someone';
-
-      for (const contactUserId of contactUserIds) {
-        if (userObjectId.toString() === contactUserId.toString()) {
-          continue; // Skip self
-        }
-
-        const alert = await PanicAlert.create({
-          incidentId: incident._id,
-          fromUserId: userObjectId,
-          toUserId: contactUserId,
-          status: 'SENT',
-          emailSent: false,
-        });
-
-        // Send email notification
-        const receiverUser = await User.findById(contactUserId).select('email username');
-        if (receiverUser && receiverUser.email) {
-          try {
-            const emailResult = await sendEmergencyEmail({
-              toEmail: receiverUser.email,
-              senderUsername,
-              senderUserId: userId,
-              incidentId: (incident._id as mongoose.Types.ObjectId).toString(),
-            });
-
-            if (emailResult.success) {
-              notificationsSent++;
-            }
-
-            alert.emailSent = emailResult.success;
-            if (emailResult.error) {
-              alert.emailError = emailResult.error;
-            }
-            await alert.save();
-          } catch (emailError: any) {
-            console.error('[WalkieTalkie] Emergency email error:', emailError);
-          }
-        }
-      }
-    }
-
-    // Save emergency message to database (use special threadId)
-    const emergencyThreadId = `emergency_${userId}_${Date.now()}`;
-    await WalkieTalkieMessage.create({
-      threadId: emergencyThreadId,
-      userId: userObjectId,
-      role: 'user',
-      text: transcript,
-      audioUrl: `/uploads/${path.basename(req.file.path)}`,
-      createdAt: new Date(),
-    });
-
-    await WalkieTalkieMessage.create({
-      threadId: emergencyThreadId,
-      userId: userObjectId,
-      role: 'assistant',
-      text: aiResponse,
-      createdAt: new Date(),
-    });
-
-    console.log('[WalkieTalkie] Emergency processed - notifications sent:', notificationsSent);
-
-    // Return response
-    res.json({
-      success: true,
-      transcript,
-      responseText: aiResponse,
-      notificationsSent,
-      incidentId: (incident._id as mongoose.Types.ObjectId).toString(),
-    });
-
-  } catch (error: any) {
-    console.error('[WalkieTalkie] sendEmergency error:', error);
-    
-    // Cleanup file on error
-    if (req.file?.path) {
-      fs.unlink(req.file.path, () => {});
-    }
-    
-    res.status(500).json({
-      error: 'Failed to process emergency',
-      details: error.message || 'Unknown error',
-    });
-  }
-};
-
-/**
- * GET /api/wt/thread/:threadId
- * Return message history for a thread
+ * GET /api/wt/thread?userA=<id>&userB=<id>
+ * Get thread between two users (all messages)
+ * 
+ * Query params:
+ * - userA: string (required)
+ * - userB: string (required)
+ * 
+ * Response:
+ * {
+ *   threadId: string,
+ *   messages: [
+ *     {
+ *       messageId: string,
+ *       fromUserId: string,
+ *       toUserId: string,
+ *       audioUrl: string,
+ *       createdAt: string (ISO)
+ *     }
+ *   ]
+ * }
  */
 export const getThread = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -444,27 +171,43 @@ export const getThread = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const userId = req.user.userId;
-    const userObjectId = new mongoose.Types.ObjectId(userId);
-    const threadId = req.params.threadId;
+    const authenticatedUserId = req.user.userId;
+    const userA = req.query.userA as string;
+    const userB = req.query.userB as string;
 
-    if (!threadId) {
-      res.status(400).json({ error: 'Missing threadId' });
+    // Validate query params
+    if (!userA || !userB) {
+      res.status(400).json({ error: 'Missing userA or userB query parameter' });
       return;
     }
 
-    // Get messages for this thread (only for this user)
+    // Validate user IDs
+    if (!mongoose.Types.ObjectId.isValid(userA) || !mongoose.Types.ObjectId.isValid(userB)) {
+      res.status(400).json({ error: 'Invalid user ID format' });
+      return;
+    }
+
+    // Validate authenticated user is one of the participants
+    if (authenticatedUserId !== userA && authenticatedUserId !== userB) {
+      res.status(403).json({ error: 'You can only access threads you are part of' });
+      return;
+    }
+
+    // Generate thread ID (deterministic)
+    const threadId = generateThreadId(userA, userB);
+
+    // Get all messages for this thread
     const messages = await WalkieTalkieMessage.find({
       threadId,
-      userId: userObjectId,
     })
       .sort({ createdAt: 1 }) // Oldest first
       .lean();
 
     // Format messages
     const formattedMessages = messages.map(msg => ({
-      role: msg.role,
-      text: msg.text,
+      messageId: msg.messageId,
+      fromUserId: msg.fromUserId.toString(),
+      toUserId: msg.toUserId.toString(),
       audioUrl: msg.audioUrl,
       createdAt: msg.createdAt.toISOString(),
     }));
@@ -483,3 +226,172 @@ export const getThread = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
+/**
+ * GET /api/wt/poll?threadId=<id>&after=<timestamp or messageId>
+ * Get new messages in a thread after a specific timestamp or messageId
+ * 
+ * Query params:
+ * - threadId: string (required)
+ * - after: string (optional, ISO timestamp or messageId)
+ * 
+ * Response:
+ * {
+ *   messages: [
+ *     {
+ *       messageId: string,
+ *       fromUserId: string,
+ *       toUserId: string,
+ *       audioUrl: string,
+ *       createdAt: string (ISO)
+ *     }
+ *   ]
+ * }
+ */
+export const pollMessages = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const authenticatedUserId = req.user.userId;
+    const threadId = req.query.threadId as string;
+    const after = req.query.after as string | undefined;
+
+    // Validate threadId
+    if (!threadId) {
+      res.status(400).json({ error: 'Missing threadId query parameter' });
+      return;
+    }
+
+    // Build query
+    const query: any = { threadId };
+
+    // If 'after' is provided, filter messages after that point
+    if (after) {
+      // Check if 'after' is a messageId
+      const afterMessage = await WalkieTalkieMessage.findOne({ messageId: after }).lean();
+      if (afterMessage) {
+        // 'after' is a messageId, get messages after this message's timestamp
+        query.createdAt = { $gt: afterMessage.createdAt };
+      } else {
+        // 'after' is likely a timestamp, try to parse it
+        const afterDate = new Date(after);
+        if (!isNaN(afterDate.getTime())) {
+          query.createdAt = { $gt: afterDate };
+        }
+      }
+    }
+
+    // Get messages
+    const messages = await WalkieTalkieMessage.find(query)
+      .sort({ createdAt: 1 }) // Oldest first
+      .lean();
+
+    // Verify user has access to this thread
+    const hasAccess = messages.some(
+      msg => msg.fromUserId.toString() === authenticatedUserId || msg.toUserId.toString() === authenticatedUserId
+    );
+
+    if (messages.length > 0 && !hasAccess) {
+      res.status(403).json({ error: 'You do not have access to this thread' });
+      return;
+    }
+
+    // Format messages
+    const formattedMessages = messages.map(msg => ({
+      messageId: msg.messageId,
+      fromUserId: msg.fromUserId.toString(),
+      toUserId: msg.toUserId.toString(),
+      audioUrl: msg.audioUrl,
+      createdAt: msg.createdAt.toISOString(),
+    }));
+
+    res.json({
+      messages: formattedMessages,
+    });
+
+  } catch (error: any) {
+    console.error('[WalkieTalkie] pollMessages error:', error);
+    res.status(500).json({
+      error: 'Failed to poll messages',
+      details: error.message || 'Unknown error',
+    });
+  }
+};
+
+/**
+ * GET /api/wt/audio/:messageId
+ * Serve audio file for a message
+ * 
+ * Params:
+ * - messageId: string (required)
+ * 
+ * Response:
+ * - Audio file stream
+ */
+export const getAudio = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const authenticatedUserId = req.user.userId;
+    const messageId = req.params.messageId;
+
+    if (!messageId) {
+      res.status(400).json({ error: 'Missing messageId' });
+      return;
+    }
+
+    // Get message from database
+    const message = await WalkieTalkieMessage.findOne({ messageId }).lean();
+
+    if (!message) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
+
+    // Verify user has access (must be sender or receiver)
+    const fromUserIdStr = message.fromUserId.toString();
+    const toUserIdStr = message.toUserId.toString();
+
+    if (authenticatedUserId !== fromUserIdStr && authenticatedUserId !== toUserIdStr) {
+      res.status(403).json({ error: 'You do not have access to this message' });
+      return;
+    }
+
+    // Get audio file path
+    const audioPath = message.audioPath || path.join(__dirname, '..', '..', 'uploads', path.basename(message.audioUrl));
+
+    // Check if file exists
+    if (!fs.existsSync(audioPath)) {
+      res.status(404).json({ error: 'Audio file not found' });
+      return;
+    }
+
+    // Determine content type based on file extension
+    const ext = path.extname(audioPath).toLowerCase();
+    let contentType = 'audio/mpeg';
+    if (ext === '.wav') {
+      contentType = 'audio/wav';
+    } else if (ext === '.m4a' || ext === '.mp4') {
+      contentType = 'audio/mp4';
+    }
+
+    // Set headers and stream file
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${path.basename(audioPath)}"`);
+    
+    const fileStream = fs.createReadStream(audioPath);
+    fileStream.pipe(res);
+
+  } catch (error: any) {
+    console.error('[WalkieTalkie] getAudio error:', error);
+    res.status(500).json({
+      error: 'Failed to get audio',
+      details: error.message || 'Unknown error',
+    });
+  }
+};
