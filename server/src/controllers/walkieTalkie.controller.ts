@@ -4,6 +4,17 @@ import fs from 'fs';
 import path from 'path';
 import WalkieTalkieMessage from '../models/WalkieTalkieMessage';
 
+// Ensure uploads directory exists on module load
+const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  try {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+    console.log('[WalkieTalkie] Created uploads directory:', uploadsDir);
+  } catch (err: any) {
+    console.error('[WalkieTalkie] Failed to create uploads directory:', err);
+  }
+}
+
 /**
  * Generate a consistent thread ID between two users
  * Thread ID is deterministic: sorted user IDs joined with underscore
@@ -105,6 +116,20 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
     const audioFilename = path.basename(audioPath);
     const audioUrl = `/api/wt/audio/${messageId}`;
 
+    // Verify file exists
+    if (!fs.existsSync(audioPath)) {
+      throw new Error(`Audio file not found at path: ${audioPath}`);
+    }
+
+    console.log('[WalkieTalkie] Saving message to database:', {
+      messageId,
+      threadId,
+      fromUserId,
+      toUserId,
+      audioPath,
+      audioUrl,
+    });
+
     // Create message record in database
     const message = await WalkieTalkieMessage.create({
       messageId,
@@ -129,15 +154,28 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
 
   } catch (error: any) {
     console.error('[WalkieTalkie] sendMessage error:', error);
+    console.error('[WalkieTalkie] Error stack:', error.stack);
+    console.error('[WalkieTalkie] Request details:', {
+      hasFile: !!req.file,
+      filePath: req.file?.path,
+      body: req.body,
+      userId: req.user?.userId,
+    });
     
     // Cleanup file on error
     if (req.file?.path) {
-      fs.unlink(req.file.path, () => {});
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.error('[WalkieTalkie] Error deleting file:', unlinkError);
+      }
     }
     
     res.status(500).json({
       error: 'Failed to send message',
       details: error.message || 'Unknown error',
+      // Include more details in development
+      ...(process.env.NODE_ENV === 'development' && { stack: error.stack }),
     });
   }
 };
