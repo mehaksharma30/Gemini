@@ -19,6 +19,7 @@ import emergencyRoutes from './routes/emergency.routes';
 import panicRoutes from './routes/panic.routes';
 import alertsRoutes from './routes/alerts.routes';
 import webPubSubRoutes from './routes/webPubSub.routes';
+import walkieTalkieRoutes from './routes/walkieTalkie.routes';
 import { setupDMSocket } from './socket/dmSocket';
 import { setupVoiceChatSocket } from './socket/voiceChatSocket';
 import { initializeAzureSpeech } from './services/azureSpeech.service';
@@ -137,6 +138,7 @@ app.use('/api/emergency', emergencyRoutes);
 app.use('/api/panic', panicRoutes);
 app.use('/api/alerts', alertsRoutes);
 app.use('/api/webpubsub', webPubSubRoutes);
+app.use('/api/wt', walkieTalkieRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ 

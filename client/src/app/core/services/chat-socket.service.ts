@@ -30,21 +30,58 @@ export class ChatSocketService {
 
     // Extract base URL from apiUrl (remove /api if present)
     const baseUrl = environment.apiUrl.replace(/\/api\/?$/, '');
+    
+    // Socket.IO configuration - prioritize WebSocket first
     this.socket = io(baseUrl, {
       auth: {
         token,
       },
-      transports: ['websocket', 'polling'],
+      transports: ['websocket', 'polling'], // CRITICAL: Try WebSocket first, fallback to polling
+      upgrade: true,
+      rememberUpgrade: true, // Remember successful WebSocket upgrade for future connections
+      // Azure Web Apps require longer timeouts for WebSocket upgrades
+      timeout: 20000, // 20 seconds (default is 20s, but explicit for Azure)
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      reconnectionAttempts: 5,
+      forceNew: false,
+      // Disable compression to avoid frame header issues on Azure
+      perMessageDeflate: false,
+      // Force WebSocket connection (if available)
+      forceBase64: false, // Use binary WebSocket frames (not base64)
     });
 
     this.socket.on('connect', () => {
-      console.log('Socket.IO connected');
+      console.log('[ChatSocket] ✅ Socket.IO connected successfully');
+      console.log('[ChatSocket] Transport:', this.socket?.io.engine.transport.name);
       this.connectedSubject.next(true);
     });
 
-    this.socket.on('disconnect', () => {
-      console.log('Socket.IO disconnected');
+    this.socket.on('disconnect', (reason: string) => {
+      console.log('[ChatSocket] ⚠️ Socket.IO disconnected:', reason);
       this.connectedSubject.next(false);
+    });
+
+    // Handle connection errors (including "Invalid frame header")
+    this.socket.on('connect_error', (error: Error) => {
+      console.error('[ChatSocket] ❌ Connection error:', error.message);
+      console.error('[ChatSocket] Error details:', {
+        message: error.message,
+        type: error.constructor.name,
+        stack: error.stack,
+      });
+      
+      // If it's a frame header error, log Azure-specific guidance
+      if (error.message.includes('frame header') || error.message.includes('Invalid')) {
+        console.warn('[ChatSocket] ⚠️ This may be an Azure Web Apps WebSocket issue.');
+        console.warn('[ChatSocket] ⚠️ Ensure WebSocket is enabled in Azure App Service configuration.');
+      }
+    });
+
+    // Handle transport upgrade
+    this.socket.io.on('upgrade', () => {
+      console.log('[ChatSocket] 🔄 Transport upgraded to:', this.socket?.io.engine.transport.name);
     });
 
     this.socket.on('dm:message', (message: DirectMessage) => {

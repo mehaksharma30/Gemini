@@ -1,0 +1,88 @@
+<div class="walkie-talkie-container">
+  <div class="header">
+    <h1>Walkie-Talkie</h1>
+    <p class="subtitle">Turn-based voice messaging</p>
+  </div>
+
+  <div class="messages-container" #messagesContainer>
+    <div *ngIf="messages.length === 0" class="empty-state">
+      <p>Start a conversation by sending a message or recording audio.</p>
+    </div>
+
+    <div *ngFor="let message of messages" class="message" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'">
+      <div class="message-content">
+        <div class="message-header">
+          <span class="role">{{ message.role === 'user' ? 'You' : 'AI' }}</span>
+          <span class="timestamp">{{ formatTime(message.createdAt) }}</span>
+        </div>
+        <div class="message-text">{{ message.text }}</div>
+        <button 
+          *ngIf="message.audioUrl" 
+          class="play-audio-btn" 
+          (click)="playAudio(message.audioUrl!)"
+          type="button"
+        >
+          🔊 Play Audio
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="input-container">
+    <div class="text-input-group">
+      <input
+        type="text"
+        [(ngModel)]="textInput"
+        (keyup.enter)="sendTextMessage()"
+        placeholder="Type a message..."
+        [disabled]="isSending || isRecording"
+        class="text-input"
+      />
+      <button
+        (click)="sendTextMessage()"
+        [disabled]="!textInput.trim() || isSending || isRecording"
+        class="send-btn"
+        type="button"
+      >
+        Send
+      </button>
+    </div>
+
+    <div class="audio-controls">
+      <button
+        *ngIf="!isRecording"
+        (click)="startRecording()"
+        [disabled]="isSending || isEmergencySending"
+        class="record-btn"
+        type="button"
+      >
+        🎤 Record Audio
+      </button>
+      <button
+        *ngIf="isRecording"
+        (click)="stopRecording()"
+        class="stop-btn"
+        type="button"
+      >
+        ⏹️ Stop Recording
+      </button>
+    </div>
+
+    <div class="emergency-container">
+      <button
+        (click)="sendEmergency()"
+        [disabled]="isSending || isRecording || isEmergencySending"
+        class="emergency-btn"
+        type="button"
+      >
+        🚨 Emergency
+      </button>
+      <span *ngIf="isEmergencySending" class="emergency-status">Sending emergency...</span>
+    </div>
+
+    <div *ngIf="isSending" class="sending-status">
+      <span>Sending...</span>
+    </div>
+  </div>
+</div>
+

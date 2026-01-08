@@ -89,6 +89,11 @@ export const routes: Routes = [
     canActivate: [authGuard],
   },
   {
+    path: 'walkie-talkie',
+    loadComponent: () => import('./walkie-talkie/walkie-talkie.component').then(m => m.WalkieTalkieComponent),
+    canActivate: [authGuard],
+  },
+  {
     path: '**',
     redirectTo: '/feed',
   },
