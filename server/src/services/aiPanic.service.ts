@@ -1,6 +1,4 @@
 import OpenAI from 'openai';
-import { getAIProvider } from '../config/aiProvider';
-import { askOllama } from './ollamaService';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -28,6 +26,11 @@ const userExpressedDistressMap = new Map<string, boolean>();
 // Track acknowledged emotional events per conversation: Map<conversationId, Set<string>>
 const acknowledgedEvents = new Map<string, Set<string>>();
 
+// Track breathing state per conversation: Map<conversationId, { offered: boolean, declined: boolean }>
+// - offered: true if assistant has already offered breathing in this conversation
+// - declined: true if user explicitly declined the offer
+const breathingStateStore = new Map<string, { offered: boolean; declined: boolean }>();
+
 // User style profile for soft learning: Map<userId, UserStyleProfile>
 interface UserStyleProfile {
   preferredResponseLength: 'short' | 'medium' | 'long'; // Based on user's message length
@@ -40,133 +43,136 @@ interface UserStyleProfile {
 
 const userStyleProfiles = new Map<string, UserStyleProfile>();
 
-const SYSTEM_PROMPT = `You are ONE real, caring human friend.
+const SYSTEM_PROMPT = `You are a calm, caring best friend.
+• Warm
+• Human
+• Attentive
+• No repetition
+• No robotic phrases
+• No over-explaining
 
-You are not a therapist.
-You are not a chatbot.
-You are not here to sound correct.
-You are here to make the user feel LESS ALONE and MORE SAFE.
+⸻
 
-Always reply ONLY in English.
+GENERAL RESPONSE STYLE
 
-────────────────────────
-HOW YOU TALK
-────────────────────────
-- Talk like a close friend who genuinely cares.
-- Warm, reassuring, calm.
-- No robotic lines.
-- No scripts.
-- No menus.
-- No commands.
+• 2–4 short, natural sentences
+• Gentle, caring tone
+• Respond to WHAT the user asked — nothing extra
+• Do NOT repeat the same reassurance line again and again
+• Do NOT start every reply with "I'm here with you"
+• Use that phrase only when the user is distressed
 
-You don't rush.
-You don't lecture.
-You stay.
+⸻
 
-CRITICAL ANTI-LOOP RULE:
-- Never repeat the same supportive line twice in a row.
-- If you already said "I'm here with you" or "I'm really glad you told me", switch to a different angle.
-- Vary your language naturally. Each reply must feel fresh, not templated.
+WHEN USER IS EMOTIONAL (depressed, crying, anxious)
 
-HARD BANNED PHRASES (use alternatives instead):
-- ❌ "I'm really glad you reached out" → ✅ "I'm here." / "Yeah, I'm listening."
-- ❌ "I want to understand what you're going through" → ✅ "Talk to me—what's spiking it right now?" / "What happened right before it started?"
-- ❌ "Can you tell me more?" → ✅ "What's going on?" / "What happened?" / "Talk to me."
+DO:
+• Acknowledge the feeling
+• Stay present
+• Invite them to talk OR offer help
 
-────────────────────────
-HOW YOU LISTEN
-────────────────────────
-- First, understand what the user is REALLY feeling.
-- Respond to the emotion, not just the words.
-- Do NOT repeat their exact sentence back.
-- Reflect meaning, not text.
+EXAMPLE:
+"That sounds really heavy. I can hear how much this is affecting you. Do you want to tell me what's been hardest right now, or should we slow things down together?"
 
-────────────────────────
-WHEN USER IS SAD / DEPRESSED
-────────────────────────
-- Reassure presence.
-- Make them feel supported.
-- Invite them to share, gently.
+DON'T:
+• Give advice immediately
+• Repeat the same sentence every message
+• Cut sentences mid-way
 
-Tone example:
-"I'm really glad you told me. I'm here, and we can take this one step at a time."
+⸻
 
-────────────────────────
-WHEN USER IS OVERWHELMED / CRYING
-────────────────────────
-- Presence first.
-- Few words.
-- Soft reassurance.
-- No fixing unless they ask.
+POST / FEED HANDLING (IMPORTANT)
 
-Example:
-"I'm here. You don't have to be okay right now. I've got you."
+User will NOT ask for "exact quote".
+They will ask casually:
+• "Can you see my post?"
+• "What did I write?"
+• "How did I recover?"
 
-────────────────────────
-PANIC ATTACK HANDLING (FRIEND STYLE - CRITICAL)
-────────────────────────
-When user says "panic attack" or "having a panic attack":
-- Respond in 2–4 sentences:
-  1) Confirm + reassure ("I'm here. Panic attacks are scary, but they pass.")
-  2) Ask ONE simple question about safety/body (e.g., "Are you somewhere you can sit?")
-  3) Offer ONE tiny grounding action ONLY if user seems stuck (not always)
-- Keep it calm, human, not robotic.
-- Don't dump long checklists.
-- Don't use generic phrases like "I want to understand what you're going through."
+RULES:
+• NEVER dump the full post text
+• NEVER say "I'm here with you" in post replies
+• NEVER repeat the post multiple times
 
-Example response:
-"I'm here. Panic attacks are really scary, but they do pass. Are you somewhere you can sit down? If you want, try putting both feet flat on the floor and taking one slow breath."
+Instead, respond like a friend who remembers:
 
-────────────────────────
-SELF-HARM / FEELING UNSAFE (VERY IMPORTANT)
-────────────────────────
-If the user says they want to hurt themselves or feel unsafe:
+EXAMPLE:
+"Yes — you wrote that you had a panic attack and you got through it using music, breathing exercises, and by sharing with people who understood."
 
-You MUST:
-1) Show care and concern immediately.
-2) Reassure that you are here and they are not alone.
-3) Validate the PAIN, not the action.
-4) Gently slow things down.
-5) Ask at most ONE gentle safety question.
-6) Encourage safety and reaching out, without panic.
+If user asks follow-up:
+"What else did I mention?"
+→ Answer ONLY from the post content, calmly and accurately.
 
-NEVER say:
-- "That makes sense"
-- "I understand why you'd do that"
-- Cold one-liners
+DO NOT add steps or words that were NOT in the post.
+DO NOT hallucinate.
 
-Correct tone example:
-"Hey… I'm really glad you told me. I care about you, and I'm here with you right now. I can hear how much pain you're in, and we don't have to solve everything at once. Are you somewhere safe right now?"
+⸻
 
-If danger becomes immediate or repeated, gently encourage contacting someone trusted or emergency help.
+BREATHING RULES (VERY IMPORTANT)
 
-────────────────────────
-ADVICE & SOLUTIONS
-────────────────────────
-- Do NOT give advice by default.
-- Give advice ONLY if the user asks or feels stuck.
-- One small, gentle suggestion at a time.
-- Say things like:
-  "We'll figure this out together."
-  "We can look for a way forward, slowly."
+Breathing should feel HUMAN, not robotic.
 
-────────────────────────
-STYLE RULES
-────────────────────────
-- Sound human, not perfect.
-- Sometimes short.
-- Sometimes 2–4 sentences.
-- Never end abruptly.
-- Never feel cold or dismissive.
-- Never repeat the same supportive line twice in a row.
+TRIGGERS (ANY OF THESE):
+• "I can't breathe"
+• "difficulty breathing"
+• "chest feels tight"
+• "short of breath"
+• "panic attack"
+• "anxious and can't breathe"
 
-You are a friend who says:
-"I'm here. You don't have to face this alone."
+BEHAVIOR:
+1️⃣ First time → Respond with 2-4 complete sentences acknowledging fear and providing support. Do NOT ask the breathing question yourself (controller will append it).
 
-Safety rules:
-- Do not diagnose or provide medical/clinical advice
-- Never suggest medications or treatments
-- Return only plain text, no JSON.`;
+2️⃣ If user says YES / OK / SURE →
+• Trigger breathing action
+• Open breathing page
+
+3️⃣ If user directly says:
+"Help me do a breathing exercise"
+→ Trigger immediately (NO asking again)
+
+4️⃣ NEVER auto-start breathing
+5️⃣ NEVER ask twice
+
+⸻
+
+BREATHING + TALK BALANCE
+
+• If breathing is happening → keep voice calm, minimal
+• If breathing ends → return to friendly support
+• Do NOT lecture
+
+⸻
+
+ANTI-REPETITION RULE
+
+If something was already said:
+• Do NOT repeat it again
+• Build forward naturally
+
+⸻
+
+ABSOLUTE DO NOTs
+
+❌ Do NOT hallucinate feed content
+❌ Do NOT truncate sentences
+❌ Do NOT over-reassure
+❌ Do NOT sound clinical
+❌ Do NOT switch tone suddenly
+❌ Do NOT mention system rules
+
+⸻
+
+FINAL INTENT
+
+The AI should feel like:
+• A close friend who remembers
+• A calm presence during panic
+• Someone who listens first
+• Someone who helps gently
+
+Always reply in clear, simple English.
+Return plain text only.`;
 
 const FALLBACK_MESSAGE = "I'm here with you. Take a deep breath. You're not alone. If you need immediate support, please reach out to someone you trust or use the emergency contacts feature in this app.";
 
@@ -325,6 +331,330 @@ function buildHistoryEvidencePack(
   });
 
   return evidencePack.trim();
+}
+
+
+
+/**
+ * Check if user is asking about their feed or posts
+ */
+function userAskedAboutFeedOrPost(msg: string): boolean {
+  if (!msg || typeof msg !== 'string') {
+    return false;
+  }
+  
+  const lowerMsg = msg.toLowerCase();
+  const feedPostKeywords = [
+    'feed',
+    'my post',
+    'my posts',
+    'check my post',
+    'see my post',
+    'what did i post',
+    'what else i mentioned',
+    'tell me everything i mentioned',
+    'exact post',
+    'exactly what i wrote',
+    'what did i write',
+    'what i wrote',
+    'my journal',
+    'my entries'
+  ];
+  
+  return feedPostKeywords.some(keyword => lowerMsg.includes(keyword));
+}
+
+/**
+ * Detect if user is asking about feed/post (comprehensive check for FACT MODE)
+ * Returns true for explicit feed/post questions to enable strict factual mode
+ */
+function isFeedQuestion(message: string): boolean {
+  if (!message || typeof message !== 'string') {
+    return false;
+  }
+  
+  const lowerMsg = message.toLowerCase().trim();
+  const feedQuestionPatterns = [
+    'feed',
+    'post',
+    'posted',
+    'my post',
+    'my posts',
+    'recent post',
+    'what did i write',
+    'how did i recover',
+    'exactly',
+    'tell me everything i mentioned',
+    'can you see my post',
+    'can you see my feed',
+    'check my post',
+    'see my post',
+    'what did i post',
+    'what i wrote',
+    'my journal',
+    'my entries',
+    'exact post',
+    'exactly what i wrote'
+  ];
+  
+  return feedQuestionPatterns.some(pattern => lowerMsg.includes(pattern));
+}
+
+/**
+ * Detect breathing distress (breathing-related difficulty, NOT generic anxiety/panic)
+ * Only matches actual breathing difficulty phrases, not "anxious" or "panic" alone
+ * Uses comprehensive phrase matching for all synonyms
+ */
+function detectBreathingDistress(message: string): boolean {
+  if (!message || typeof message !== 'string') {
+    return false;
+  }
+
+  const lowerMessage = message.toLowerCase();
+  
+  // Comprehensive breathing distress phrases (case-insensitive, substring match)
+  // IMPORTANT: Does NOT match "anxious" or "panic" alone - only breathing-specific terms
+  const breathingDistressPhrases = [
+    // English phrases
+    "can't breathe",
+    "cannot breathe",
+    "cant breathe",
+    "not able to breathe",
+    "unable to breathe",
+    "breathing is hard",
+    "hard to breathe",
+    "difficulty breathing",
+    "difficulty in breathing",
+    "having difficulty breathing",
+    "trouble breathing",
+    "struggling to breathe",
+    "breathing difficulty",
+    "suffocating",
+    "choking",
+    "gasping",
+    "breathless",
+    "chest feels tight",
+    "chest tight",
+    "tight chest",
+    "air hunger",
+    "hyperventilating",
+    "shortness of breath",
+    "out of breath",
+    "can't catch my breath",
+    "cant catch my breath",
+    "breathing problem",
+    "breathing trouble",
+    // Hindi/Hinglish romanized phrases (phrase-level only, no standalone "saans")
+    "saans nahi aa rahi",
+    "saans nahi aa raha",
+    "saans nahi ho rahi",
+    "saans nahi ho raha",
+    "breath nahi aa rahi",
+    "breath nahi aa raha",
+    "breath nahi ho raha",
+    "breath nahi ho rahi",
+    "air nahi mil rahi",
+    "air nahi mil raha",
+    "chest tight ho raha hai",
+    "chest tight ho rahi hai",
+    // Explicit requests (will be handled separately but included for completeness)
+    "breathing karwa do",
+    "breathing karna hai"
+  ];
+  
+  return breathingDistressPhrases.some(phrase => lowerMessage.includes(phrase));
+}
+
+/**
+ * Detect explicit breathing exercise request
+ */
+function detectBreathingRequest(message: string): boolean {
+  if (!message || typeof message !== 'string') {
+    return false;
+  }
+
+  const lowerMessage = message.toLowerCase().trim();
+  
+  const explicitRequests = [
+    'help me do breathing',
+    'help me do the breathing exercise',
+    'start breathing exercise',
+    'do the breathing exercise',
+    "let's do breathing",
+    'lets do breathing',
+    'breathing exercise please',
+    'breathing exercise',
+    'do breathing',
+    'start breathing',
+    'want to do breathing',
+    'can we do breathing',
+    'breathing help',
+    'need breathing exercise',
+    'breathing exercise now',
+    'do breathing now',
+    'breathing karwa do',
+    'breathing karna hai',
+    'breathing start karo'
+  ];
+  
+  return explicitRequests.some(request => lowerMessage.includes(request));
+}
+
+/**
+ * Check if user message is explicit consent (yes, okay, sure, let's do it, yeah)
+ * Only returns true if message is clearly consenting to a breathing offer
+ */
+function isExplicitConsentYes(message: string): boolean {
+  if (!message || typeof message !== 'string') {
+    return false;
+  }
+
+  const lowerMessage = message.toLowerCase().trim();
+  
+  const consentPhrases = [
+    'yes',
+    'okay',
+    'ok',
+    'sure',
+    "let's do it",
+    "lets do it",
+    'yeah',
+    'yep',
+    'yup',
+    'alright',
+    'sounds good',
+    'go ahead',
+    'let\'s go',
+    'lets go',
+    'please',
+    'help me breathe',
+    'help me do breathing'
+  ];
+  
+  // Check for exact match or word boundaries
+  return consentPhrases.some(phrase => {
+    if (lowerMessage === phrase) {
+      return true;
+    }
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+    return regex.test(lowerMessage);
+  });
+}
+
+/**
+ * Check if user message is explicit refusal (no, not now, maybe later, etc.)
+ */
+function isExplicitConsentNo(message: string): boolean {
+  if (!message || typeof message !== 'string') {
+    return false;
+  }
+
+  const lowerMessage = message.toLowerCase().trim();
+  
+  const refusalPhrases = [
+    'no',
+    'not now',
+    'maybe later',
+    'not right now',
+    "don't want to",
+    "dont want to",
+    'nah',
+    'nope',
+    'not yet',
+    'later',
+    'maybe not',
+    "i'm good",
+    "im good",
+    "i'm okay",
+    "im okay"
+  ];
+  
+  // Check for exact match or word boundaries
+  return refusalPhrases.some(phrase => {
+    if (lowerMessage === phrase) {
+      return true;
+    }
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+    return regex.test(lowerMessage);
+  });
+}
+
+/**
+ * Get breathing decision based on conversation state and user message.
+ * Returns deterministic flags for offer and action.
+ * 
+ * @param conversationId - Conversation ID to track state
+ * @param message - User's message
+ * @returns Object with { shouldOfferBreathing: boolean, shouldTriggerBreathingAction: boolean }
+ */
+export function getBreathingDecision(
+  conversationId: string,
+  message: string
+): { shouldOfferBreathing: boolean; shouldTriggerBreathingAction: boolean } {
+  if (!message || typeof message !== 'string' || !conversationId) {
+    return { shouldOfferBreathing: false, shouldTriggerBreathingAction: false };
+  }
+
+  // Initialize state if missing
+  if (!breathingStateStore.has(conversationId)) {
+    breathingStateStore.set(conversationId, { offered: false, declined: false });
+  }
+
+  const state = breathingStateStore.get(conversationId)!;
+  const lowerMessage = message.toLowerCase().trim();
+
+  // Check for explicit request (immediate action, unless declined)
+  if (detectBreathingRequest(message)) {
+    if (!state.declined) {
+      // Reset declined if user explicitly requests
+      state.declined = false;
+      breathingStateStore.set(conversationId, state);
+      console.log(`[AI] [Breathing] Explicit request detected - triggering action`);
+      return { shouldOfferBreathing: false, shouldTriggerBreathingAction: true };
+    } else {
+      // User previously declined but now explicitly requests - allow it
+      state.declined = false;
+      breathingStateStore.set(conversationId, state);
+      console.log(`[AI] [Breathing] Explicit request after decline - allowing action`);
+      return { shouldOfferBreathing: false, shouldTriggerBreathingAction: true };
+    }
+  }
+
+  // Check for explicit consent (yes/okay/sure) after offer
+  if (state.offered && !state.declined && isExplicitConsentYes(message)) {
+    // Reset state after action
+    breathingStateStore.set(conversationId, { offered: false, declined: false });
+    console.log(`[AI] [Breathing] Consent detected after offer - triggering action`);
+    return { shouldOfferBreathing: false, shouldTriggerBreathingAction: true };
+  }
+
+  // Check for explicit decline (no/not now/dont)
+  if (isExplicitConsentNo(message)) {
+    state.declined = true;
+    breathingStateStore.set(conversationId, state);
+    console.log(`[AI] [Breathing] User declined - setting declined=true, no further offers`);
+    return { shouldOfferBreathing: false, shouldTriggerBreathingAction: false };
+  }
+
+  // Check for breathing distress (triggers offer, not action)
+  if (detectBreathingDistress(message)) {
+    // Only offer if not already offered and not declined
+    if (!state.offered && !state.declined) {
+      state.offered = true;
+      breathingStateStore.set(conversationId, state);
+      console.log(`[AI] [Breathing] Breathing distress detected - setting offered=true`);
+      return { shouldOfferBreathing: true, shouldTriggerBreathingAction: false };
+    } else {
+      // Already offered or declined - don't offer again
+      console.log(`[AI] [Breathing] Breathing distress detected but already offered=${state.offered} or declined=${state.declined} - skipping offer`);
+      return { shouldOfferBreathing: false, shouldTriggerBreathingAction: false };
+    }
+  }
+
+  // No action, no offer
+  return { shouldOfferBreathing: false, shouldTriggerBreathingAction: false };
 }
 
 /**
@@ -501,6 +831,41 @@ function detectCryingOrOverwhelm(userMessage: string): boolean {
   ];
   
   return overwhelmIndicators.some(indicator => lowerMessage.includes(indicator));
+}
+
+/**
+ * Detect if user is experiencing breathing difficulty.
+ * Matches various phrases and synonyms for breathing problems.
+ */
+function detectBreathingDifficulty(userMessage: string): boolean {
+  if (!userMessage || typeof userMessage !== 'string') {
+    return false;
+  }
+
+  const lowerMessage = userMessage.toLowerCase();
+  const breathingIndicators = [
+    "can't breathe",
+    "cant breathe",
+    "not able to breathe",
+    "hard to breathe",
+    "breathing problem",
+    "shortness of breath",
+    "out of breath",
+    "suffocating",
+    "choking",
+    "chest tight",
+    "tight chest",
+    "air hunger",
+    "hyperventilating",
+    "breath nahi ho raha",
+    "can't catch my breath",
+    "cant catch my breath",
+    "struggling to breathe",
+    "difficulty breathing",
+    "trouble breathing"
+  ];
+  
+  return breathingIndicators.some(indicator => lowerMessage.includes(indicator));
 }
 
 /**
@@ -934,6 +1299,12 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
   let cleaned = response;
   const lowerResponse = response.toLowerCase();
   
+  // CRITICAL: Detect panic attack from user message (for panic-aware handling)
+  const isPanicAttack = userMessage ? detectPanicAttack(userMessage) : false;
+  
+  // CRITICAL: Don't apply crying/overwhelm mode if panic attack is detected
+  const shouldApplyCryingMode = isCryingOrOverwhelmed && !isPanicAttack;
+  
   // ANTI-LOOP CHECK: Detect if response contains banned template phrases
   const bannedTemplatePhrases = [
     "I'm really glad you reached out. I'm here, and I want to understand what you're going through. Can you tell me more?",
@@ -971,36 +1342,155 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
     }
   }
   
-  // CRYING/OVERWHELM MODE: Enforce 1-2 sentences, no questions, no advice, BUT keep warmth
-  if (isCryingOrOverwhelmed) {
-    // Remove questions
-    if (responseContainsQuestion(cleaned)) {
-      cleaned = removeQuestionsFromResponse(cleaned);
+  // PANIC ATTACK HANDLING: Allow 1 safety/body question + optional tiny grounding
+  if (isPanicAttack) {
+    // Count questions in response
+    const questionCount = (cleaned.match(/\?/g) || []).length;
+    
+    // If more than 1 question, remove extra questions (keep only first one)
+    if (questionCount > 1) {
+      const sentences = cleaned.split(/([.!?]+)/);
+      let questionFound = false;
+      const keptSentences: string[] = [];
+      
+      for (let i = 0; i < sentences.length; i += 2) {
+        const sentence = sentences[i].trim();
+        const punctuation = sentences[i + 1] || '';
+        
+        if (sentence && punctuation.includes('?')) {
+          if (!questionFound) {
+            // Keep first question
+            keptSentences.push(sentence + punctuation);
+            questionFound = true;
+          }
+          // Skip subsequent questions
+        } else if (sentence) {
+          keptSentences.push(sentence + punctuation);
+        }
+      }
+      
+      cleaned = keptSentences.join(' ').trim();
     }
     
+    // Allow tiny grounding action but avoid dumping lists
+    // If response has multiple grounding suggestions, keep only one
+    const groundingPhrases = ['breathing', 'grounding', 'feet flat', 'slow breath', 'sit down'];
+    let groundingCount = 0;
+    for (const phrase of groundingPhrases) {
+      if (lowerResponse.includes(phrase)) {
+        groundingCount++;
+      }
+    }
+    
+    // If multiple grounding suggestions, simplify to one
+    if (groundingCount > 1) {
+      // Keep first grounding mention, remove others
+      const sentences = cleaned.split(/[.!?]+/).filter(s => s.trim().length > 0);
+      const simplified: string[] = [];
+      let groundingFound = false;
+      
+      for (const sentence of sentences) {
+        const hasGrounding = groundingPhrases.some(phrase => sentence.toLowerCase().includes(phrase));
+        if (hasGrounding && !groundingFound) {
+          simplified.push(sentence);
+          groundingFound = true;
+        } else if (!hasGrounding) {
+          simplified.push(sentence);
+        }
+      }
+      
+      if (simplified.length > 0) {
+        cleaned = simplified.join('. ').trim() + '.';
+      }
+    }
+    
+    console.log('[AI] Panic attack mode - allowed 1 safety question + optional tiny grounding');
+  }
+  
+  // CRYING/OVERWHELM MODE: Enforce emotional warmth structure (validation + presence + one question)
+  // CRITICAL: Only apply if NOT panic attack
+  if (shouldApplyCryingMode) {
     // Remove advice
     if (responseContainsAdvice(cleaned)) {
       cleaned = removeAdviceFromResponse(cleaned);
     }
     
-    // Enforce 1-2 sentences max, but ensure warmth is preserved
+    // Check if response has the three elements: validation + presence + one question
     const sentences = cleaned.split(/[.!?]+/).filter(s => s.trim().length > 0);
-    if (sentences.length > 2) {
-      cleaned = sentences.slice(0, 2).join('. ').trim() + '.';
-    }
+    const questionCount = (cleaned.match(/\?/g) || []).length;
     
-    // If too long, use warm presence response (not just "I'm here")
-    if (cleaned.split(/\s+/).length > 20) {
-      const warmPresenceResponses = [
-        "I'm here with you. You don't have to be okay right now.",
-        "I'm staying with you. It's okay to let it out.",
-        "I'm here. You don't have to be strong right now. I've got you."
+    // Ensure we have validation + presence + one question (~3 sentences)
+    // If response is too short or missing elements, enhance it
+    if (sentences.length < 2 || questionCount === 0) {
+      const validationPhrases = [
+        "I can hear how much this is hurting you",
+        "This sounds really hard",
+        "I can feel how heavy this is for you",
+        "I can see how much pain you're in"
       ];
-      const hash = cleaned.length % warmPresenceResponses.length;
-      cleaned = warmPresenceResponses[hash];
+      const presencePhrases = [
+        "I'm here with you right now",
+        "I'm staying with you",
+        "I'm here, and you don't have to face this alone",
+        "I'm here with you"
+      ];
+      const questionPhrases = [
+        "What's going on?",
+        "What happened?",
+        "Talk to me—what's on your mind?",
+        "What's making this so hard right now?"
+      ];
+      
+      // Build warm response with three elements
+      const hash = cleaned.length % validationPhrases.length;
+      cleaned = `${validationPhrases[hash]}. ${presencePhrases[hash]}. ${questionPhrases[hash]}`;
+      console.log('[AI] Enhanced crying/overwhelm response with validation + presence + question');
     }
+    // REMOVED: Aggressive shortening logic (slicing to first 3 sentences, removing extra questions)
+    // We keep warmth enhancement but don't delete content or cut quotes
     
-    console.log('[AI] Crying/overwhelm mode - enforced warm presence response (1-2 sentences)');
+    console.log('[AI] Crying/overwhelm mode - enforced warm response (validation + presence + one question)');
+  }
+  
+  // EMOTIONAL WARMTH GUARD: For distressed messages (depressed, hopeless, sad), ensure warmth structure
+  if (userMessage) {
+    const lowerUserMessage = userMessage.toLowerCase();
+    const isDistressed = /(depressed|hopeless|sad|sadness|crying|can't go on|give up)/i.test(lowerUserMessage);
+    
+    if (isDistressed && !isPanicAttack && !isCryingOrOverwhelmed) {
+      // Check if response has validation + presence + question structure
+      const sentences = cleaned.split(/[.!?]+/).filter(s => s.trim().length > 0);
+      const questionCount = (cleaned.match(/\?/g) || []).length;
+      
+      // If missing elements, enhance response
+      if (sentences.length < 2 || questionCount === 0) {
+        const validationPhrases = [
+          "I can hear how much this is hurting you",
+          "This sounds really hard",
+          "I can feel how heavy this is for you",
+          "I can see how much pain you're in"
+        ];
+        const presencePhrases = [
+          "I'm here with you right now",
+          "I'm staying with you",
+          "I'm here, and you don't have to face this alone",
+          "I'm here with you"
+        ];
+        const questionPhrases = [
+          "What's going on?",
+          "What happened?",
+          "Talk to me—what's on your mind?",
+          "What's making this so hard right now?"
+        ];
+        
+        const hash = cleaned.length % validationPhrases.length;
+        cleaned = `${validationPhrases[hash]}. ${presencePhrases[hash]}. ${questionPhrases[hash]}`;
+        console.log('[AI] Enhanced distressed response with validation + presence + question');
+      } else if (sentences.length > 3) {
+        // REMOVED: Aggressive shortening logic (slicing to first 3 sentences, removing extra questions)
+        // We keep warmth enhancement but don't delete content or cut quotes
+      }
+    }
   }
   
   // EVENT-LEVEL MEMORY GUARD: Check if event was already acknowledged
@@ -1095,29 +1585,50 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
     // Check if current response contains advice
     const hasAdvice = responseContainsAdvice(cleaned);
     
-    const isFirstAfterDistress = expressedDistress && !previousAssistantMsg;
+    // CRITICAL: Detect breathing difficulty/panic for exception
+    const hasBreathingDifficulty = userMessage ? detectBreathingDistress(userMessage) : false;
+    const hasBreathingOrPanic = hasBreathingDifficulty || isPanicAttack;
     
-    // BLOCK ADVICE if:
-    // 1. User refused advice and didn't explicitly ask again
-    if (previouslyRefused && !wantsAdvice && hasAdvice) {
-      console.log('[AI] Blocking advice - user previously refused');
+    // CRITICAL FIX: LISTEN FIRST rule - only block advice if:
+    // - User expressed distress AND didn't ask for advice
+    // - User previously refused advice
+    // - NOT in panic mode (panic allows tiny grounding)
+    // - NOT when breathing difficulty/panic is detected (breathing offer must not be stripped)
+    const shouldBlockAdvice = !hasBreathingOrPanic && !isPanicAttack && (
+      // User expressed distress and didn't ask for advice
+      (expressedDistress && !wantsAdvice && hasAdvice) ||
+      // User previously refused advice and didn't explicitly ask again
+      (previouslyRefused && !wantsAdvice && hasAdvice) ||
+      // User didn't ask for help and last message had advice (avoid pushing)
+      (lastHadAdvice && !wantsAdvice && hasAdvice)
+    );
+    
+    // BLOCK ADVICE if conditions met (but preserve breathing offers)
+    if (shouldBlockAdvice) {
+      console.log('[AI] Blocking advice - user expressed distress/refused and did not ask for help');
       // Remove advice phrases and rewrite to presence-only
-      cleaned = removeAdviceFromResponse(cleaned);
-    }
-    // 2. First reply after distress (LISTEN FIRST rule)
-    else if (isFirstAfterDistress && hasAdvice) {
-      console.log('[AI] Blocking advice - first reply after distress (LISTEN FIRST rule)');
-      cleaned = removeAdviceFromResponse(cleaned);
-    }
-    // 3. User didn't ask for help and last message had advice
-    else if (lastHadAdvice && !wantsAdvice && hasAdvice) {
-      console.log('[AI] Blocking advice - user did not ask and last message had advice');
-      cleaned = removeAdviceFromResponse(cleaned);
-    }
-    // 4. User didn't ask for help and no permission
-    else if (!wantsAdvice && hasAdvice && !expressedDistress) {
-      console.log('[AI] Blocking advice - user did not ask for help');
-      cleaned = removeAdviceFromResponse(cleaned);
+      // BUT: If response contains breathing offer, preserve it
+      const breathingOfferPattern = /want to do a short breathing exercise|breathing exercise with me|want to try a short breathing/i;
+      const hasBreathingOffer = breathingOfferPattern.test(cleaned);
+      
+      if (hasBreathingOffer) {
+        // Extract breathing offer sentence
+        const sentences = cleaned.split(/([.!?]+)/);
+        const breathingSentence = sentences.find((s, i) => {
+          const fullSentence = s + (sentences[i + 1] || '');
+          return breathingOfferPattern.test(fullSentence);
+        });
+        
+        // Remove advice but keep breathing offer
+        cleaned = removeAdviceFromResponse(cleaned);
+        
+        // Re-add breathing offer if it was removed
+        if (breathingSentence && !cleaned.includes(breathingSentence.trim())) {
+          cleaned = cleaned.trim() + ' ' + breathingSentence.trim();
+        }
+      } else {
+        cleaned = removeAdviceFromResponse(cleaned);
+      }
     }
     
     // Track if current response has advice (for next turn)
@@ -1259,30 +1770,31 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
   const lowerCleaned = cleaned.toLowerCase();
   const lowerUserMessage = (userMessage || '').toLowerCase();
 
-  // Step 3: GREETINGS - Track across entire conversation (only allow once)
+  // Step 3: GREETINGS - Only check CONSECUTIVE repetition (previous message only)
   const greetings = [
     "hey",
     "hi",
     "hello"
   ];
   
-  // Check if any greeting was used before
+  // Check if greeting was used in PREVIOUS assistant message (consecutive only)
   let hasRepeatedGreeting = false;
   let greetingFound = '';
-  for (const greeting of greetings) {
-    if (lowerCleaned.startsWith(greeting + ',') || lowerCleaned.startsWith(greeting + ' ')) {
-      const wasUsedBefore = allAssistantMessages.some(msg => 
-        msg.startsWith(greeting + ',') || msg.startsWith(greeting + ' ')
-      );
-      if (wasUsedBefore) {
-        hasRepeatedGreeting = true;
-        greetingFound = greeting;
-        break;
+  if (previousAssistantMsg) {
+    const lowerPrevious = previousAssistantMsg.content.toLowerCase();
+    for (const greeting of greetings) {
+      if (lowerCleaned.startsWith(greeting + ',') || lowerCleaned.startsWith(greeting + ' ')) {
+        // Check if previous message also started with same greeting
+        if (lowerPrevious.startsWith(greeting + ',') || lowerPrevious.startsWith(greeting + ' ')) {
+          hasRepeatedGreeting = true;
+          greetingFound = greeting;
+          break;
+        }
       }
     }
   }
   
-  // Step 3b: Check for repeated reassurance phrases
+  // Step 3b: Check for CONSECUTIVE reassurance phrase repetition (previous message only)
   const reassurancePhrases = [
     "i'm here with you",
     "i'm really glad you told me",
@@ -1292,15 +1804,39 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
   
   let hasRepeatedReassurance = false;
   let reassuranceFound = '';
-  for (const phrase of reassurancePhrases) {
-    if (lowerCleaned.includes(phrase)) {
-      const wasUsedBefore = allAssistantMessages.some(msg => msg.includes(phrase));
-      if (wasUsedBefore) {
-        hasRepeatedReassurance = true;
-        reassuranceFound = phrase;
-        break;
+  if (previousAssistantMsg) {
+    const lowerPrevious = previousAssistantMsg.content.toLowerCase();
+    for (const phrase of reassurancePhrases) {
+      if (lowerCleaned.includes(phrase)) {
+        // Check if previous message also contained same phrase (consecutive only)
+        if (lowerPrevious.includes(phrase)) {
+          hasRepeatedReassurance = true;
+          reassuranceFound = phrase;
+          break;
+        }
       }
     }
+  }
+  
+  // CRITICAL FIX: If reassurance is repeated consecutively, REPHRASE (don't delete)
+  if (hasRepeatedReassurance && reassuranceFound) {
+    // Rephrase with alternative wording instead of deleting
+    const alternatives: { [key: string]: string[] } = {
+      "i'm here with you": ["I'm staying with you", "I'm right here", "I'm here", "I'm with you"],
+      "i'm really glad you told me": ["I'm glad you shared that", "Thanks for telling me", "I'm really glad you said that"],
+      "you're not alone": ["You don't have to face this alone", "I'm here with you", "You have support"],
+      "i'm here for you": ["I'm here with you", "I'm staying with you", "I'm right here"]
+    };
+    
+    const altList = alternatives[reassuranceFound] || ["I'm here"];
+    const hash = cleaned.length % altList.length;
+    const replacement = altList[hash];
+    
+    // Replace the repeated phrase with alternative
+    const regex = new RegExp(reassuranceFound.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    cleaned = cleaned.replace(regex, replacement).replace(/\s+/g, ' ').trim();
+    console.log('[AI] Rephrased consecutive reassurance phrase:', reassuranceFound, '->', replacement);
+    hasRepeatedReassurance = false; // Reset flag since we rephrased
   }
   
   // Step 3b: EXACT-SAME-SENTENCE REPETITION ONLY - Check if current message is near-duplicate of previous
@@ -1358,34 +1894,16 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
       }
     }
     
-    // Step 5b: Match user's message length/intensity
-    const userLength = userMessage.trim().split(/\s+/).length;
-    const responseLength = cleaned.trim().split(/\s+/).length;
-    
-    // If user sent short message but response is long, shorten it
-    if (userLength <= 10 && responseLength > 30) {
-      const sentences = cleaned.split(/[.!?]+/).filter(s => s.trim().length > 0);
-      if (sentences.length > 0) {
-        cleaned = sentences.slice(0, 2).join('. ').trim() + '.';
-      }
-    }
-    // If user sent long/overwhelmed message, allow 3-4 sentences
-    if (userLength > 20 && responseLength < 15) {
-      // Allow response to be longer if user is overwhelmed
-      // (but don't force it - let AI decide naturally)
-    }
+    // REMOVED: Aggressive shortening logic that slices responses to 1-2 sentences
+    // This was causing truncation issues. Let the model handle response length naturally.
   }
 
-  // Step 6: Remove repeated greeting if found
+  // Step 6: Remove or rephrase repeated greeting if found (consecutive only)
   if (hasRepeatedGreeting && greetingFound) {
+    // Remove greeting prefix or rephrase
     const regex = new RegExp('^' + greetingFound.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[,\\s]*', 'gi');
     cleaned = cleaned.replace(regex, '').trim();
-  }
-
-  // Step 7: Remove repeated reassurance if found
-  if (hasRepeatedReassurance && reassuranceFound) {
-    const regex = new RegExp(reassuranceFound.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-    cleaned = cleaned.replace(regex, '').replace(/\s+/g, ' ').trim();
+    console.log('[AI] Removed consecutive repeated greeting:', greetingFound);
   }
 
   // Step 6: Track and detect repeated suggestions
@@ -1412,91 +1930,66 @@ function guardAntiRepetition(response: string, history: ChatMessage[], userMessa
     }
   }
 
-  // Step 7: If near-duplicate, high overlap, emotional mirroring, or repeated suggestion detected, rewrite response
-  // Note: We removed hasBannedRepetition and hasRepeatedReassurance checks - we want to keep caring phrases
+  // Step 7: If near-duplicate, high overlap, emotional mirroring, or repeated suggestion detected, REPHRASE (don't overwrite)
+  // CRITICAL: Preserve model's generated meaning as much as possible - only rephrase, don't replace with generic lines
   if (isNearDuplicateMessage || overlapPercentage > 25 || hasEmotionalMirroring || hasRepeatedSuggestion) {
-    // If near-duplicate, rephrase with alternate wording (don't delete to emptiness)
+    // If near-duplicate, rephrase with alternate wording (preserve meaning)
     if (isNearDuplicateMessage) {
+      // Try to rephrase the current response while preserving meaning
+      // Extract key sentiment/meaning from cleaned response
+      const hasQuestion = cleaned.includes('?');
+      const hasReassurance = /(here|with you|glad|told me)/i.test(cleaned);
+      
       // Rephrase with similar meaning but different words
-      const alternatePhrasings = [
-        "I'm here with you. What's going on?",
-        "I'm really glad you told me. I'm here, and we can take this one step at a time.",
-        "I hear you. I'm staying with you right now.",
-        "I'm here. You don't have to face this alone."
-      ];
-      const hash = cleaned.length % alternatePhrasings.length;
-      cleaned = alternatePhrasings[hash];
-      console.log('[AI] Rephrased near-duplicate message with alternate wording');
-    }
-    // If >25% overlap or repeated suggestion, rewrite shorter with different wording
-    else if (overlapPercentage > 25 || hasRepeatedSuggestion) {
-      // Rewrite to be shorter (2-3 sentences max) with different wording
-      const sentences = cleaned.split(/[.!?]+/).filter(s => s.trim().length > 0);
-      if (sentences.length > 0) {
-        // Take first 2 sentences max, ensure they're different
-        const shortened = sentences.slice(0, 2).join('. ').trim() + '.';
-        // If still too similar, use a warm, varied response (not empty validation)
-        if (shortened.length > 0 && shortened.length < cleaned.length * 0.7) {
-          cleaned = shortened;
-        } else {
-          // Use a warm, varied response (not empty validation)
-          const warmResponses = [
-            "I'm here with you. That sounds really hard.",
-            "I'm really glad you told me. I'm here, and we can take this one step at a time.",
-            "I'm here. You don't have to face this alone. What's going on?",
-            "I'm staying with you. Talk to me—what happened?",
-            "I'm here with you. What's spiking it right now?"
-          ];
-          const hash = cleaned.length % warmResponses.length;
-          cleaned = warmResponses[hash];
-        }
+      if (hasQuestion && hasReassurance) {
+        cleaned = "I'm staying with you. What's going on?";
+      } else if (hasReassurance) {
+        cleaned = "I'm here. You don't have to face this alone.";
+      } else if (hasQuestion) {
+        cleaned = "What's happening right now?";
+      } else {
+        cleaned = "I'm here with you. That sounds really hard.";
       }
+      console.log('[AI] Rephrased near-duplicate message while preserving meaning');
+    }
+    // If >25% overlap or repeated suggestion, rephrase (preserve meaning, NO truncation)
+    else if (overlapPercentage > 25 || hasRepeatedSuggestion) {
+      // REMOVED: Logic that slices to first 2 sentences (causes truncation)
+      // Instead, rephrase the full response with word variations
+      const rephrased = cleaned
+        .replace(/i'm here with you/gi, 'I\'m staying with you')
+        .replace(/i'm really glad you told me/gi, 'I\'m glad you shared that')
+        .replace(/you're not alone/gi, 'You don\'t have to face this alone');
+      
+      if (rephrased.length > 10) {
+        cleaned = rephrased;
+      }
+      console.log('[AI] Rephrased high-overlap message while preserving meaning (no truncation)');
     } else if (hasEmotionalMirroring) {
-      // If emotional mirroring detected, rewrite to show understanding
-      const understandingResponses = [
+      // If emotional mirroring detected, rephrase to show understanding (not just mirror)
+      // Try to preserve the core message but show understanding
+      const understandingPhrases = [
         "That sounds really hard to carry.",
         "Everything must feel too heavy right now.",
         "I can hear how much this is weighing on you.",
-        "It sounds like you're holding a lot right now.",
-        "This must feel overwhelming.",
-        "I'm really glad you told me. I'm here with you.",
-        "That sounds like it's really weighing you down."
+        "It sounds like you're holding a lot right now."
       ];
       
-      const hash = cleaned.length % understandingResponses.length;
-      cleaned = understandingResponses[hash];
-    } else {
-      // Generate warm, varied responses (not empty validation)
-      const warmResponses = [
-        "I'm here with you. That sounds really hard.",
-        "I'm really glad you told me. I'm here, and we can take this one step at a time.",
-        "I'm here. You don't have to face this alone. What happened?",
-        "I'm staying with you. Talk to me—what happened?",
-        "I'm here with you. What's been weighing on you?",
-        "I'm really glad you reached out. I'm here, and we can work through this together.",
-        "I'm here. That sounds really difficult. What happened right before it started?"
-      ];
-
-      // If cleaned response is still meaningful, keep it but ensure it's natural
-      if (cleaned.length > 10) {
-        // Keep it but ensure it doesn't repeat structure (2-3 sentences max)
-        const sentences = cleaned.split(/[.!?]+/).filter(s => s.trim().length > 0);
-        if (sentences.length > 0) {
-          // Use first 2 sentences max (default 2-3 sentences rule)
-          if (sentences.length > 2) {
-            cleaned = sentences.slice(0, 2).join('. ').trim() + '.';
-          } else if (sentences.length > 1 && (sentences[0].length + sentences[1].length) < 120) {
-            cleaned = sentences.slice(0, 2).join('. ').trim() + '.';
-          } else {
-            cleaned = sentences[0].trim() + '.';
-          }
-        }
+      // Use understanding phrase but keep any unique content from original
+      // REMOVED: Logic that slices to first 2 sentences (causes truncation)
+      const sentences = cleaned.split(/[.!?]+/).filter(s => s.trim().length > 0);
+      if (sentences.length > 0) {
+        const hash = cleaned.length % understandingPhrases.length;
+        // Keep full response, just prepend understanding phrase if needed
+        cleaned = understandingPhrases[hash] + ' ' + cleaned;
       } else {
-        // Use a warm response (not empty validation)
-        const hash = cleaned.length % warmResponses.length;
-        cleaned = warmResponses[hash];
+        const hash = cleaned.length % understandingPhrases.length;
+        cleaned = understandingPhrases[hash];
       }
+      console.log('[AI] Rephrased emotional mirroring to show understanding');
     }
+    // REMOVED: Logic that slices responses to 2 sentences max (causes truncation)
+    // Let the model handle response length naturally
   }
 
   // Step 9: REMOVED - Final check for repeated greetings/reassurance/banned phrases
@@ -1568,6 +2061,25 @@ function enforceFriendCompleteness(
 ): string {
   if (!reply || typeof reply !== 'string') {
     reply = "I'm here with you.";
+  }
+  
+  // FACT MODE: If user asked about feed/post, skip minimum length enforcement
+  // Allow factual, exact replies without forcing "I'm here..." spam
+  if (userAskedAboutFeedOrPost(userMessage)) {
+    const trimmed = reply.trim();
+    // Only ensure it's not empty, but allow short factual replies
+    if (!trimmed || trimmed.length === 0) {
+      return "I don't have your post loaded right now.";
+    }
+    
+    // Post-process to catch placeholders/incomplete sentences in FACT MODE
+    if (trimmed.endsWith('using…') || trimmed.endsWith('with.') || trimmed.endsWith('when…') || 
+        trimmed.match(/\.\.\.$/) || trimmed.match(/…$/)) {
+      // Incomplete sentence detected - return minimal factual fallback
+      return "I want to be accurate — can I check that again?";
+    }
+    
+    return reply; // Return as-is for FACT MODE
   }
   
   const trimmed = reply.trim();
@@ -1748,9 +2260,10 @@ export async function getAIResponse(prompt: string, retryCount: number = 0): Pro
   const model = process.env.OPENAI_MODEL || 'gpt-5-mini';
   const baseURL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 
-  // Determine max_output_tokens: higher on retry, or based on model
+  // Determine max_output_tokens: set to 2000 for gpt-5-mini (both initial and retry)
+  // This reduces incomplete outputs while keeping responses complete
   const isRetry = retryCount > 0;
-  const maxOutputTokens = isRetry ? 2000 : (model.includes('gpt-5') ? 1000 : 800);
+  const maxOutputTokens = 2000; // Fixed at 2000 for all cases
   
   // Build request parameters
   const requestParams: any = {
@@ -1768,7 +2281,8 @@ export async function getAIResponse(prompt: string, retryCount: number = 0): Pro
     model, 
     max_output_tokens: maxOutputTokens,
     retry: isRetry,
-    baseURL: baseURL.replace(/\/[^\/]*$/, '/***') 
+    baseURL: baseURL.replace(/\/[^\/]*$/, '/***'),
+    provider: 'OpenAI' // Confirm OpenAI provider (no Ollama fallback)
   });
 
   const openai = new OpenAI({
@@ -1785,14 +2299,41 @@ export async function getAIResponse(prompt: string, retryCount: number = 0): Pro
       ),
     ]);
 
-    console.log('[AI] Raw response:', JSON.stringify(completion, null, 2));
+    // CRITICAL: Safe logging - don't log full JSON (PII risk, massive logs)
+    // Log only status/incomplete_reason/model + first ~120 chars of extracted text
+    const response = completion as any;
+    const status = response.status || 'unknown';
+    const incompleteReason = response.incomplete_details?.reason || 'none';
+    const model = response.model || 'unknown';
+    const extractedText = extractTextFromResponse(completion);
+    const textPreview = extractedText ? extractedText.substring(0, 120) : 'no text extracted';
+    
+    console.log('[AI] Response status:', status, 'incomplete_reason:', incompleteReason, 'model:', model);
+    if (extractedText) {
+      console.log('[AI] Extracted text preview (first 120 chars):', textPreview + (extractedText.length > 120 ? '...' : ''));
+    }
 
     // Extract text from response (PRIMARY: output_text, FALLBACK: output[].content[].text)
-    const text = extractTextFromResponse(completion);
+    let text = extractTextFromResponse(completion);
+    
+    // Finish sentence safeguard: if text ends with incomplete phrase, append punctuation
+    if (text && text.length > 40) {
+      const trimmed = text.trim();
+      const incompleteEndings = ['using', 'with', 'and', ',', '—', '...', '…'];
+      const endsWithIncomplete = incompleteEndings.some(ending => 
+        trimmed.toLowerCase().endsWith(ending.toLowerCase())
+      );
+      const endsWithPunctuation = /[.!?]$/.test(trimmed);
+      
+      if (endsWithIncomplete && !endsWithPunctuation) {
+        // Append period if clearly incomplete
+        text = trimmed + '.';
+        console.log('[AI] Applied finish sentence safeguard - appended punctuation');
+      }
+    }
     
     // If we have text, return it immediately (even if response is incomplete)
     if (text) {
-      const response = completion as any;
       const isIncomplete = response.status === 'incomplete';
       if (isIncomplete) {
         console.log('[AI] Response incomplete but returning extracted text');
@@ -1801,9 +2342,7 @@ export async function getAIResponse(prompt: string, retryCount: number = 0): Pro
     }
     
     // Check if response is incomplete due to max_output_tokens (for retry logic)
-    const response = completion as any;
     const isIncomplete = response.status === 'incomplete';
-    const incompleteReason = response.incomplete_details?.reason;
     const isMaxTokensIssue = incompleteReason === 'max_output_tokens' || incompleteReason === 'max_tokens';
     
     // If incomplete due to max_output_tokens and no text extracted, retry once with higher limit
@@ -1822,79 +2361,11 @@ export async function getAIResponse(prompt: string, retryCount: number = 0): Pro
   }
 }
 
-/**
- * Get AI panic response using Ollama.
- * Throws error if API call fails (caller should handle).
- */
-async function getAIPanicResponseOllama(
-  message: string,
-  history: ChatMessage[] = [],
-  userContext?: { recentPosts?: Array<{ title: string; content: string; tags: string[]; createdAt: Date }> },
-  conversationId?: string,
-  userId?: string,
-  detectedLang?: 'en' // Optional: detected language from STT (always 'en' - English only)
-): Promise<string> {
-  // Build context from conversation history
-  let context = '';
-  if (history.length > 0) {
-    context = 'Previous conversation:\n';
-    for (const msg of history) {
-      const roleLabel = msg.role === 'user' ? 'User' : 'Assistant';
-      context += `${roleLabel}: ${msg.content}\n`;
-    }
-    context += '\n';
-  }
-
-  // Generate personal context summary (1-3 bullet points, subtle and stable)
-  if (userContext?.recentPosts && userContext.recentPosts.length > 0) {
-    const personalSummary = generatePersonalContextSummary(userContext.recentPosts);
-    if (personalSummary) {
-      context += `Personal context (use silently, do not mention explicitly):\n${personalSummary}\n\n`;
-    }
-  }
-
-  // Update user style profile if userId provided
-  if (userId && message) {
-    const userMessageLength = message.trim().split(/\s+/).length;
-    const adviceAccepted = null; // Will be updated in guard
-    const questionEngagement = false; // Will be updated based on response
-    updateUserStyleProfile(userId, message, userMessageLength, adviceAccepted, questionEngagement);
-  }
-
-  // Reply language is always English (Hindi support removed)
-  const replyLanguage: 'english' = 'english';
-  console.log('[AI] [LANGUAGE] Reply language: English (always)');
-  console.log('[AI] [LANGUAGE] Latest user message (first 60 chars):', message.substring(0, 60));
-  
-  // Check for crying/overwhelm mode
-  const isCryingOrOverwhelmed = detectCryingOrOverwhelm(message);
-  
-  // Check for panic attack
-  const isPanicAttack = detectPanicAttack(message);
-  
-  // Add panic attack instruction if detected
-  if (isPanicAttack) {
-    context += `PANIC ATTACK DETECTED: User is having a panic attack. Respond in 2-4 sentences: 1) Confirm + reassure, 2) Ask ONE simple safety/body question, 3) Offer ONE tiny grounding action only if needed. Keep it calm, human, not robotic.\n\n`;
-  }
-  
-  // Add crying/overwhelm mode instruction (only if not panic attack)
-  if (isCryingOrOverwhelmed && !isPanicAttack) {
-    context += `USER STATE: User is crying or overwhelmed. Prioritize presence. 1-2 sentences max. No questions unless user initiates. No action suggestions.\n\n`;
-  }
-
-  // Build prompt with system instructions
-  console.log('[AI] [PROMPT] Using system prompt: "HUMAN FRIEND MODE - Caring, warm, protective"');
-  const prompt = `${SYSTEM_PROMPT}\n\n${context}Current message: ${message || 'Start'}`;
-
-  const response = await askOllama(prompt, context || 'No previous context');
-  const cleaned = cleanRepetitivePhrases(response);
-  return guardAntiRepetition(cleaned, history, message, conversationId, userId, isCryingOrOverwhelmed);
-}
 
 /**
  * Get AI panic response with conversation history and user context.
- * Uses the active provider (OpenAI or Ollama) based on configuration.
- * Throws error if API call fails (caller should handle).
+ * ALWAYS uses OpenAI (gpt-5-mini) - never falls back to Ollama.
+ * Throws error if API call fails or OPENAI_API_KEY is missing (caller should handle).
  */
 export async function getAIPanicResponse(
   message: string,
@@ -1904,13 +2375,21 @@ export async function getAIPanicResponse(
   userId?: string,
   detectedLang?: 'en' // Optional: detected language from STT (always 'en' - English only)
 ): Promise<string> {
+  // CRITICAL: Check for OpenAI API key - throw clear error if missing
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    const error = new Error('OPENAI_API_KEY is required for panic/support chat. Please configure it in your environment variables.');
+    console.error('[AI] ERROR:', error.message);
+    throw error;
+  }
+
   // CRISIS OVERRIDE: If crisis language detected, bypass normal AI and return human crisis response
   if (detectCrisisLanguage(message)) {
     console.log('[AI] Crisis language detected, using override response');
     return generateCrisisResponse();
   }
 
-  // Update user style profile if userId provided
+  // Update user style profile if userId provide
   if (userId && message) {
     const userMessageLength = message.trim().split(/\s+/).length;
     const adviceAccepted = null; // Will be updated in guard
@@ -1928,26 +2407,26 @@ export async function getAIPanicResponse(
 
   // Check for panic attack
   const isPanicAttack = detectPanicAttack(message);
+  
+  // Check for breathing distress (handled separately in prompt building)
+  const hasBreathingDistress = detectBreathingDistress(message);
 
-  const provider = getAIProvider();
-
-  if (provider === 'ollama') {
-    return await getAIPanicResponseOllama(message, history, userContext, conversationId, userId, detectedLang);
-  }
-
-  // Default to OpenAI
+  // ALWAYS use OpenAI (gpt-5-mini)
   // Build input string from system prompt and conversation history
   console.log('[AI] [PROMPT] Using system prompt: "HUMAN FRIEND MODE - Caring, warm, protective"');
   let inputText = `System: ${SYSTEM_PROMPT}\n\n`;
   
   // Add panic attack instruction if detected
   if (isPanicAttack) {
-    inputText += `PANIC ATTACK DETECTED: User is having a panic attack. Respond in 2-4 sentences: 1) Confirm + reassure, 2) Ask ONE simple safety/body question, 3) Offer ONE tiny grounding action only if needed. Keep it calm, human, not robotic.\n\n`;
+    inputText += `PANIC ATTACK DETECTED: User is having a panic attack. Respond in 2-3 FULL, complete sentences: 1) Confirm + reassure ("I'm here. Panic attacks are scary, but they pass."), 2) Ask ONE simple safety/body question. ALWAYS finish your thoughts - do NOT trail off mid-sentence. Keep it calm, human, not robotic.\n\n`;
   }
   
-  // Add crying/overwhelm mode instruction (only if not panic attack)
-  if (isCryingOrOverwhelmed && !isPanicAttack) {
-    inputText += `USER STATE: User is crying or overwhelmed. Prioritize presence. 1-2 sentences max. No questions unless user initiates. No action suggestions.\n\n`;
+  // Breathing offer/action is now handled deterministically in controller via getBreathingDecision()
+  // Controller appends offer text and returns action based on breathing distress detection
+  // Add small instruction to ensure breathing responses complete (no mid-sentence cuts)
+  // IMPORTANT: Do NOT instruct AI to ask the breathing question - controller will append it
+  if (hasBreathingDistress) {
+    inputText += `BREATHING DISTRESS DETECTED: Respond with 2-4 complete sentences acknowledging fear and providing support. ALWAYS finish your thoughts - do NOT trail off mid-sentence. Do NOT ask the breathing question yourself.\n\n`;
   }
   
   // No language instruction needed - always English
@@ -1961,14 +2440,17 @@ export async function getAIPanicResponse(
   
   // Generate personal context summary (1-3 bullet points, subtle and stable)
   if (userContext?.recentPosts && userContext.recentPosts.length > 0) {
+    // Add instruction: AI has access to posts (so it doesn't say "I can't see your feed")
+    inputText += `You have access to the user's posts from this app. If asked about posts, answer truthfully and quote exact content. Never say "I can't see your feed" or "I don't have access".\n\n`;
+    
     const personalSummary = generatePersonalContextSummary(userContext.recentPosts);
     if (personalSummary) {
       // Only include personal context summary, not raw history dump
       inputText += `Personal context (use silently, do not mention explicitly):\n${personalSummary}\n\n`;
     }
     
-    // Check if user asked about history and inject evidence pack
-    const userAskedAboutHistory = message && (
+    // Check if user asked about history/feed and inject feed/evidence pack ONLY when asked
+    const userAskedAboutHistoryOrFeed = message && (
       message.toLowerCase().includes('remember') ||
       message.toLowerCase().includes('do you know') ||
       message.toLowerCase().includes('have i told you') ||
@@ -1976,6 +2458,9 @@ export async function getAIPanicResponse(
       message.toLowerCase().includes('did i write') ||
       message.toLowerCase().includes('post') ||
       message.toLowerCase().includes('posted') ||
+      message.toLowerCase().includes('feed') ||
+      message.toLowerCase().includes('my post') ||
+      message.toLowerCase().includes('my feed') ||
       message.toLowerCase().includes('journal') ||
       message.toLowerCase().includes('record') ||
       message.toLowerCase().includes('check') ||
@@ -1986,15 +2471,45 @@ export async function getAIPanicResponse(
       message.toLowerCase().includes('earlier') ||
       message.toLowerCase().includes('see if') ||
       message.toLowerCase().includes('see whether') ||
+      message.toLowerCase().includes('can you see') ||
+      message.toLowerCase().includes('what did i') ||
       /did i (post|write|mention|say)/i.test(message) ||
       /what did i (post|write|say)/i.test(message) ||
-      /(see|check|look).*(post|journal|record)/i.test(message)
+      /(see|check|look).*(post|journal|record|feed)/i.test(message)
     );
     
-    if (userAskedAboutHistory) {
+    // Only include USER FEED section when user explicitly asks
+    if (userAskedAboutHistoryOrFeed) {
+      // Check if user is asking specifically about feed/post (FACT MODE)
+      const isFeedPostQuestion = userAskedAboutFeedOrPost(message);
+      
+      if (isFeedPostQuestion) {
+        // FACT MODE: Include FULL post content (max 2 posts to avoid huge token usage)
+        const feedPosts = userContext.recentPosts.slice(0, 2);
+        
+        inputText += `POSTS_EVIDENCE (quote exactly, do not paraphrase):\n`;
+        for (const post of feedPosts) {
+          const date = new Date(post.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          const title = post.title || 'Untitled';
+          const content = post.content || '';
+          
+          inputText += `[Post] createdAt=${date}, title="${title}"\n`;
+          inputText += `"""${content}"""\n\n`;
+        }
+        inputText += `\n`;
+        
+        // Add FACT MODE instruction (ONLY for feed/post questions)
+        inputText += `When answering about posts, respond like a friend who remembers. Summarize what they wrote naturally and accurately. Do NOT dump the full post text. Do NOT say "I'm here with you" in post replies. Answer ONLY from the post content - do NOT add steps or words that were NOT in the post.\n\n`;
+        
+        console.log('[AI] [FEED] FACT MODE activated - injected full post content');
+      }
+      // REMOVED: "USER FEED (in-app posts)" snippet injection (80-char snippets)
+      // Posts are only included when user explicitly asks (FACT MODE above)
+      
+      // Inject evidence pack when user asks
       const evidencePack = buildHistoryEvidencePack(userContext.recentPosts, message);
       inputText += evidencePack + "\n\n";
-      console.log('[AI] [HISTORY] User asked about history - injected evidence pack');
+      console.log('[AI] [HISTORY] User asked about history/feed - injected feed and evidence pack');
     }
   }
   
@@ -2016,6 +2531,13 @@ export async function getAIPanicResponse(
   console.log('[AI] OpenAI request - input text length:', inputText.length, 'chars');
 
   const response = await getAIResponse(inputText);
+  
+  // FEED/POST MODE: Skip post-processing for feed questions (return raw response)
+  if (isFeedQuestion(message)) {
+    console.log('[AI] [FEED] Feed question detected - skipping post-processing, returning raw response');
+    return response.trim();
+  }
+  
   const cleaned = cleanRepetitivePhrases(response);
   return guardAntiRepetition(cleaned, history, message, conversationId, userId, isCryingOrOverwhelmed);
 }

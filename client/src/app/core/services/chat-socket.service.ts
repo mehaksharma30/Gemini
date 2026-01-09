@@ -42,7 +42,6 @@ export class ChatSocketService {
       auth: {
         token,
       },
-      transports: ['websocket', 'polling'], // CRITICAL: Try WebSocket first, fallback to polling
       upgrade: true,
       rememberUpgrade: true, // Remember successful WebSocket upgrade for future connections
       // Azure Web Apps require longer timeouts for WebSocket upgrades

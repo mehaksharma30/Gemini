@@ -79,6 +79,11 @@ export const routes: Routes = [
     canActivate: [authGuard],
   },
   {
+    path: 'breathing',
+    loadComponent: () => import('./breathing/breathing.component').then(m => m.BreathingComponent),
+    canActivate: [authGuard],
+  },
+  {
     path: 'alerts',
     loadComponent: () => import('./alerts/alerts.component').then(m => m.AlertsComponent),
     canActivate: [authGuard],

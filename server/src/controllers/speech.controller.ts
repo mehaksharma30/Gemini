@@ -1,7 +1,25 @@
 import { Request, Response } from 'express';
 import https from 'https';
 import fs from 'fs';
-import path from 'path';
+import { promises as fsPromises } from 'fs';
+
+// Ensure fetch is available (Node 18+ has built-in fetch, otherwise use polyfill)
+// TypeScript-safe fetch implementation
+const getFetch = (): typeof fetch => {
+  if (typeof fetch !== 'undefined') {
+    return fetch;
+  }
+  // Fallback for Node < 18 - try to use node-fetch if available
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const nodeFetch = require('node-fetch');
+    return nodeFetch.default || nodeFetch;
+  } catch {
+    throw new Error('fetch is not available. Please use Node.js 18+ or install node-fetch: npm install node-fetch');
+  }
+};
+
+const fetchImpl = getFetch();
 
 /**
  * Get Azure Speech token for frontend
@@ -94,6 +112,8 @@ export const getSpeechToken = async (req: Request, res: Response) => {
  * Output: { text: string }
  */
 export const transcribeAudio = async (req: Request, res: Response): Promise<void> => {
+  const tempFilePath = req.file?.path;
+  
   try {
     console.log('[Speech Transcribe] Request received');
     
@@ -117,8 +137,6 @@ export const transcribeAudio = async (req: Request, res: Response): Promise<void
 
     if (!key) {
       console.error('[Speech Transcribe] Azure Speech key not configured');
-      // Cleanup temp file
-      fs.unlink(req.file.path, () => {});
       res.status(500).json({ error: 'Azure speech env missing' });
       return;
     }
@@ -126,8 +144,8 @@ export const transcribeAudio = async (req: Request, res: Response): Promise<void
     console.log('[Speech Transcribe] Processing audio file:', req.file.originalname);
     console.log('[Speech Transcribe] Language:', lang, 'Region:', region);
 
-    // Read the uploaded audio file
-    const wav = fs.readFileSync(req.file.path);
+    // Read the uploaded audio file (non-blocking)
+    const wav = await fsPromises.readFile(req.file.path);
 
     // Construct Azure Speech-to-Text API URL
     const url =
@@ -137,7 +155,7 @@ export const transcribeAudio = async (req: Request, res: Response): Promise<void
     console.log('[Speech Transcribe] Calling Azure STT API...');
 
     // Call Azure Speech-to-Text API
-    const response = await fetch(url, {
+    const response = await fetchImpl(url, {
       method: 'POST',
       headers: {
         'Ocp-Apim-Subscription-Key': key,
@@ -147,19 +165,72 @@ export const transcribeAudio = async (req: Request, res: Response): Promise<void
       body: wav,
     });
 
-    // Parse response
-    const json = await response.json() as { DisplayText?: string; RecognitionStatus?: string };
+    // Handle non-OK responses
+    if (!response.ok) {
+      const statusCode = response.status;
+      let errorBody = '';
+      try {
+        errorBody = await response.text();
+      } catch {
+        errorBody = 'Unable to read error response body';
+      }
+      
+      // Truncate error body for logging (max 200 chars)
+      const truncatedBody = errorBody.length > 200 ? errorBody.substring(0, 200) + '...' : errorBody;
+      console.error('[Speech Transcribe] Azure STT API error:', {
+        status: statusCode,
+        body: truncatedBody,
+      });
+      
+      res.status(502).json({
+        error: 'STT failed',
+        statusCode,
+        details: truncatedBody,
+      });
+      return;
+    }
 
-    // Cleanup temp file
-    fs.unlink(req.file.path, () => {
-      console.log('[Speech Transcribe] Temp file cleaned up');
-    });
+    // Parse response JSON
+    let json: { DisplayText?: string; RecognitionStatus?: string };
+    try {
+      json = await response.json() as { DisplayText?: string; RecognitionStatus?: string };
+    } catch (parseError: any) {
+      console.error('[Speech Transcribe] Failed to parse Azure response as JSON:', parseError.message);
+      res.status(502).json({
+        error: 'STT failed',
+        statusCode: response.status,
+        details: 'Invalid JSON response from Azure',
+      });
+      return;
+    }
+
+    // Check RecognitionStatus and DisplayText
+    const recognitionStatus = json.RecognitionStatus;
+    const displayText = json.DisplayText || '';
+
+    // If RecognitionStatus indicates no match or DisplayText is empty, check if it's truly no speech
+    if (recognitionStatus === 'NoMatch' || (recognitionStatus !== 'Success' && !displayText.trim())) {
+      // Only return 400 if it's explicitly a no-match (user didn't speak)
+      if (recognitionStatus === 'NoMatch') {
+        console.warn('[Speech Transcribe] No speech detected in audio (NoMatch)');
+        res.status(400).json({ error: 'No speech detected' });
+        return;
+      }
+      // Otherwise, it's a server error
+      console.error('[Speech Transcribe] Azure returned non-success status:', recognitionStatus);
+      res.status(502).json({
+        error: 'STT failed',
+        statusCode: response.status,
+        details: `RecognitionStatus: ${recognitionStatus || 'unknown'}`,
+      });
+      return;
+    }
 
     // Extract text from response
-    const text = (json && json.DisplayText) ? json.DisplayText : '';
+    const text = displayText.trim();
 
-    if (!text.trim()) {
-      console.warn('[Speech Transcribe] No speech detected in audio');
+    if (!text) {
+      console.warn('[Speech Transcribe] No speech detected in audio (empty DisplayText)');
       res.status(400).json({ error: 'No speech detected' });
       return;
     }
@@ -169,14 +240,23 @@ export const transcribeAudio = async (req: Request, res: Response): Promise<void
   } catch (error: any) {
     console.error('[Speech Transcribe] Error:', error);
     
-    // Cleanup temp file on error
-    if (req.file) {
-      fs.unlink(req.file.path, () => {});
+    // Only send error response if not already sent
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: error.message || 'STT failed' 
+      });
     }
-    
-    res.status(500).json({ 
-      error: error.message || 'STT failed' 
-    });
+  } finally {
+    // CRITICAL: Always cleanup temp file (success or error)
+    if (tempFilePath) {
+      try {
+        await fsPromises.unlink(tempFilePath);
+        console.log('[Speech Transcribe] Temp file cleaned up');
+      } catch (unlinkError: any) {
+        // Log but don't throw - cleanup failure shouldn't break the response
+        console.warn('[Speech Transcribe] Failed to cleanup temp file:', unlinkError.message);
+      }
+    }
   }
 };
 

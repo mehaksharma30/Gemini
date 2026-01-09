@@ -48,6 +48,157 @@ function generateMessageId(): string {
 }
 
 /**
+ * Cleanup old audio files - keep only the most recent one
+ * Deletes the second oldest and all older files
+ */
+async function cleanupOldAudioFiles(): Promise<void> {
+  try {
+    console.log('[WalkieTalkie] 🧹 CLEANUP: Starting cleanup process...');
+    console.log('[WalkieTalkie] 🧹 CLEANUP: Uploads directory:', uploadsDir);
+    console.log('[WalkieTalkie] 🧹 CLEANUP: Uploads directory exists:', fs.existsSync(uploadsDir));
+    console.log('[WalkieTalkie] 🧹 CLEANUP: Uploads directory is directory:', fs.existsSync(uploadsDir) ? fs.statSync(uploadsDir).isDirectory() : 'N/A');
+    
+    // Check if uploads directory exists
+    if (!fs.existsSync(uploadsDir)) {
+      console.log('[WalkieTalkie] 🧹 CLEANUP: Uploads directory does not exist, skipping cleanup');
+      return;
+    }
+
+    // Get all files in uploads directory
+    const allFiles = fs.readdirSync(uploadsDir);
+    console.log('[WalkieTalkie] 🧹 CLEANUP: Total files in directory:', allFiles.length);
+    
+    // Get all walkie-talkie audio files from uploads directory
+    const files = allFiles.filter(file => file.startsWith('wt_'));
+    console.log('[WalkieTalkie] 🧹 CLEANUP: Walkie-talkie files found:', files.length, files);
+    
+    if (files.length <= 1) {
+      // Keep at least one file, no cleanup needed
+      console.log('[WalkieTalkie] 🧹 CLEANUP: Only', files.length, 'file(s) found, no cleanup needed');
+      return;
+    }
+
+    // Get all audio paths currently in database
+    const dbAudioPaths = await WalkieTalkieMessage.find({})
+      .select('audioPath')
+      .lean();
+    const dbPathsSet = new Set(
+      dbAudioPaths
+        .map(msg => msg.audioPath)
+        .filter((p): p is string => Boolean(p))
+        .map(p => path.basename(p))
+    );
+
+    // Get file stats and filter to only walkie-talkie audio files
+    const fileStats = files
+      .map(file => {
+        const filePath = path.join(uploadsDir, file);
+        try {
+          const stats = fs.statSync(filePath);
+          return {
+            name: file,
+            path: filePath,
+            mtime: stats.mtime.getTime(),
+            size: stats.size,
+            isInDatabase: dbPathsSet.has(file),
+          };
+        } catch (err: any) {
+          console.warn('[WalkieTalkie] 🧹 CLEANUP: Error getting stats for file:', file, err.message);
+          // File might have been deleted, skip it
+          return null;
+        }
+      })
+      .filter((f): f is NonNullable<typeof f> => f !== null);
+
+    console.log('[WalkieTalkie] 🧹 CLEANUP: File stats collected:', fileStats.length, 'files');
+    console.log('[WalkieTalkie] 🧹 CLEANUP: Files with stats:', fileStats.map(f => ({
+      name: f.name,
+      size: f.size,
+      mtime: new Date(f.mtime).toISOString(),
+      inDb: f.isInDatabase,
+    })));
+
+    // Sort by modification time (newest first)
+    fileStats.sort((a, b) => b.mtime - a.mtime);
+    console.log('[WalkieTalkie] 🧹 CLEANUP: Files sorted by date (newest first):', fileStats.map(f => f.name));
+
+    // Keep the newest file, delete the second oldest and all older ones
+    const filesToKeep = 1; // Keep only the most recent
+    const filesToDelete = fileStats.slice(filesToKeep);
+
+    if (filesToDelete.length === 0) {
+      return;
+    }
+
+    console.log('[WalkieTalkie] 🧹 CLEANUP: Starting audio file cleanup:', {
+      totalFiles: fileStats.length,
+      filesToKeep: filesToKeep,
+      filesToDelete: filesToDelete.length,
+      filesBeingKept: fileStats.slice(0, filesToKeep).map(f => f.name),
+    });
+
+    let deletedCount = 0;
+    let errorCount = 0;
+
+    console.log('[WalkieTalkie] 🧹 CLEANUP: Files to delete:', filesToDelete.map(f => ({
+      name: f.name,
+      path: f.path,
+      exists: fs.existsSync(f.path),
+    })));
+
+    for (const fileInfo of filesToDelete) {
+      try {
+        // Check if file still exists
+        if (!fs.existsSync(fileInfo.path)) {
+          console.log('[WalkieTalkie] 🧹 CLEANUP: File already deleted, skipping:', fileInfo.name);
+          deletedCount++; // Count as deleted since it's already gone
+          continue;
+        }
+
+        // Delete all old files (keep only the most recent one)
+        // Note: This will delete files even if they're in the database
+        // The database will be updated when files are converted/cleaned up
+        console.log('[WalkieTalkie] 🗑️ Attempting to delete file:', fileInfo.path);
+        fs.unlinkSync(fileInfo.path);
+        
+        // Verify deletion
+        if (fs.existsSync(fileInfo.path)) {
+          throw new Error('File still exists after deletion attempt');
+        }
+        
+        deletedCount++;
+        console.log('[WalkieTalkie] 🗑️ ✅ Successfully deleted old audio file:', {
+          fileName: fileInfo.name,
+          sizeBytes: fileInfo.size,
+          ageMs: Date.now() - fileInfo.mtime,
+          wasInDatabase: fileInfo.isInDatabase,
+          note: fileInfo.isInDatabase ? '⚠️ File was in database but deleted to keep only most recent' : '✅ Orphaned file deleted',
+        });
+      } catch (deleteError: any) {
+        errorCount++;
+        console.error('[WalkieTalkie] ❌ Error deleting file:', {
+          fileName: fileInfo.name,
+          filePath: fileInfo.path,
+          fileExists: fs.existsSync(fileInfo.path),
+          error: deleteError.message,
+          errorStack: deleteError.stack,
+        });
+      }
+    }
+
+    console.log('[WalkieTalkie] ✅ CLEANUP COMPLETE:', {
+      deletedCount,
+      errorCount,
+      remainingFiles: fileStats.length - deletedCount,
+    });
+
+  } catch (error: any) {
+    console.error('[WalkieTalkie] ❌ Cleanup error:', error);
+    // Don't throw - cleanup failures shouldn't break message sending
+  }
+}
+
+/**
  * Check if file is WebM format
  */
 function isWebMFormat(file: Express.Multer.File): boolean {
@@ -169,12 +320,20 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    console.log('[WalkieTalkie] Audio received:', {
+    // ENHANCED LOGGING: Track file format at upload
+    const originalExt = path.extname(req.file.originalname).toLowerCase();
+    const uploadedFormat = originalExt || 'unknown';
+    console.log('[WalkieTalkie] 📥 AUDIO UPLOAD RECEIVED:', {
+      messageId: 'pending',
       fromUserId,
       toUserId,
-      filename: req.file.originalname,
-      size: req.file.size,
-      mimeType: req.file.mimetype,
+      originalFilename: req.file.originalname,
+      uploadedFileExtension: originalExt,
+      uploadedFormat: uploadedFormat,
+      uploadedMimeType: req.file.mimetype,
+      uploadedSizeBytes: req.file.size,
+      storedPath: req.file.path,
+      timestamp: new Date().toISOString(),
     });
 
     // Generate threadId if not provided
@@ -190,31 +349,69 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
     let audioPath = originalPath;
     let shouldDeleteOriginal = false;
 
+    // ENHANCED LOGGING: Track format before conversion
+    const originalFormat = path.extname(originalPath).toLowerCase();
+    console.log('[WalkieTalkie] 🔍 FORMAT DETECTION:', {
+      messageId,
+      originalFileExtension: originalFormat,
+      originalMimeType: req.file.mimetype,
+      isWebM: isWebMFormat(req.file),
+      needsConversion: isWebMFormat(req.file),
+    });
+
     // Check if file is WebM format (needs conversion for watchOS)
     if (isWebMFormat(req.file)) {
-      console.log('[WalkieTalkie] WebM file detected, converting to M4A for watchOS compatibility');
+      console.log('[WalkieTalkie] ⚠️ WebM file detected, converting to M4A for watchOS compatibility');
       
       // Generate M4A output path
       const m4aPath = originalPath.replace(/\.webm$/i, '.m4a');
       
       try {
         // Convert WebM to M4A
+        console.log('[WalkieTalkie] 🔄 STARTING CONVERSION:', {
+          messageId,
+          fromFormat: 'WebM',
+          toFormat: 'M4A',
+          inputPath: originalPath,
+          outputPath: m4aPath,
+        });
         await convertWebMToM4A(originalPath, m4aPath);
+        
+        // Verify conversion
+        const m4aStats = fs.statSync(m4aPath);
+        console.log('[WalkieTalkie] ✅ CONVERSION SUCCESS:', {
+          messageId,
+          originalSizeBytes: req.file.size,
+          convertedSizeBytes: m4aStats.size,
+          originalFormat: 'WebM',
+          finalFormat: 'M4A',
+          originalPath,
+          convertedPath: m4aPath,
+        });
         
         // Use converted M4A file as the final audio
         audioPath = m4aPath;
         shouldDeleteOriginal = true; // Delete original WebM after conversion
-        
-        console.log('[WalkieTalkie] WebM converted to M4A:', {
-          original: originalPath,
-          converted: m4aPath,
-        });
       } catch (conversionError: any) {
-        console.error('[WalkieTalkie] WebM conversion failed, using original file:', conversionError);
+        console.error('[WalkieTalkie] ❌ CONVERSION FAILED:', {
+          messageId,
+          error: conversionError.message,
+          originalPath,
+          targetPath: m4aPath,
+          fallbackAction: 'Using original WebM (will fail on watchOS)',
+        });
         // If conversion fails, use original file (may fail on watchOS, but better than failing completely)
         audioPath = originalPath;
         shouldDeleteOriginal = false;
       }
+    } else {
+      // File is already in a compatible format
+      const finalFormat = path.extname(audioPath).toLowerCase();
+      console.log('[WalkieTalkie] ✅ NO CONVERSION NEEDED:', {
+        messageId,
+        fileFormat: finalFormat,
+        isWatchOSCompatible: finalFormat === '.m4a' || finalFormat === '.mp4' || finalFormat === '.wav' || finalFormat === '.mp3',
+      });
     }
 
     // Verify final audio file exists
@@ -224,13 +421,25 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
 
     const audioUrl = `/api/wt/audio/${messageId}`;
 
-    console.log('[WalkieTalkie] Saving message to database:', {
+    // ENHANCED LOGGING: Track what's being saved to database
+    const finalFormat = path.extname(audioPath).toLowerCase();
+    const finalStats = fs.statSync(audioPath);
+    console.log('[WalkieTalkie] 💾 SAVING TO DATABASE:', {
       messageId,
       threadId,
       fromUserId,
       toUserId,
-      audioPath,
+      storedFileFormat: finalFormat,
+      storedFileSizeBytes: finalStats.size,
+      storedFilePath: audioPath,
+      storedFileExtension: finalFormat,
       audioUrl,
+      isM4A: finalFormat === '.m4a',
+      isWatchOSCompatible: finalFormat === '.m4a' || finalFormat === '.mp4' || finalFormat === '.wav' || finalFormat === '.mp3',
+      databaseFields: {
+        audioPath: audioPath,
+        audioUrl: audioUrl,
+      },
     });
 
     // Create message record in database
@@ -257,6 +466,21 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
         // Non-fatal: continue even if cleanup fails
       }
     }
+
+    // Cleanup old audio files - keep only the most recent one
+    // Run cleanup asynchronously (don't block response)
+    // Add small delay to ensure current file is fully written
+    console.log('[WalkieTalkie] 🧹 Triggering cleanup after message save...');
+    setTimeout(() => {
+      cleanupOldAudioFiles()
+        .then(() => {
+          console.log('[WalkieTalkie] 🧹 Cleanup completed successfully');
+        })
+        .catch(err => {
+          console.error('[WalkieTalkie] ❌ Cleanup error (non-fatal):', err);
+          console.error('[WalkieTalkie] ❌ Cleanup error stack:', err.stack);
+        });
+    }, 1000); // Wait 1 second to ensure file is fully written
 
     // Return response
     res.json({
@@ -523,7 +747,7 @@ export const getAudio = async (req: Request, res: Response): Promise<void> => {
     }
 
     // Get audio file path
-    const audioPath = message.audioPath || path.join(__dirname, '..', '..', 'uploads', path.basename(message.audioUrl));
+    let audioPath = message.audioPath || path.join(__dirname, '..', '..', 'uploads', path.basename(message.audioUrl));
 
     // Check if file exists
     if (!fs.existsSync(audioPath)) {
@@ -531,25 +755,97 @@ export const getAudio = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Determine content type based on file extension
+    // STANDARDIZE TO M4A: Convert WebM to M4A on-the-fly if needed (for watchOS compatibility)
     const ext = path.extname(audioPath).toLowerCase();
+    if (ext === '.webm') {
+      const m4aPath = audioPath.replace(/\.webm$/i, '.m4a');
+      
+      // Check if converted M4A already exists
+      if (!fs.existsSync(m4aPath)) {
+        try {
+          console.log('[WalkieTalkie] Converting WebM to M4A on-the-fly:', { messageId, original: audioPath, target: m4aPath });
+          await convertWebMToM4A(audioPath, m4aPath);
+          
+          // Update database to point to M4A for future requests (non-blocking)
+          WalkieTalkieMessage.updateOne(
+            { messageId },
+            { $set: { audioPath: m4aPath } }
+          ).catch(err => {
+            console.warn('[WalkieTalkie] Failed to update DB with M4A path (non-fatal):', err);
+          });
+          
+          console.log('[WalkieTalkie] WebM converted to M4A successfully:', m4aPath);
+        } catch (conversionError: any) {
+          console.error('[WalkieTalkie] WebM to M4A conversion failed:', conversionError);
+          // Fall back to serving WebM (will fail on watchOS but better than 500 error)
+          // In production, you may want to return 503 or retry
+        }
+      }
+      
+      // Use M4A if conversion succeeded/exists, otherwise fall back to WebM
+      if (fs.existsSync(m4aPath)) {
+        audioPath = m4aPath;
+      }
+    }
+
+    // Determine content type based on final file extension
+    const finalExt = path.extname(audioPath).toLowerCase();
     let contentType = 'audio/mp4'; // Default to M4A/MP4 (watchOS compatible)
-    if (ext === '.wav') {
+    if (finalExt === '.wav') {
       contentType = 'audio/wav';
-    } else if (ext === '.m4a' || ext === '.mp4') {
+    } else if (finalExt === '.m4a' || finalExt === '.mp4') {
       contentType = 'audio/mp4';
-    } else if (ext === '.webm') {
-      contentType = 'audio/webm';
-    } else if (ext === '.mp3' || ext === '.mpeg') {
+    } else if (finalExt === '.webm') {
+      contentType = 'audio/webm'; // Fallback only (shouldn't happen after conversion)
+    } else if (finalExt === '.mp3' || finalExt === '.mpeg') {
       contentType = 'audio/mpeg';
     }
 
-    console.log('[WalkieTalkie] Serving audio:', {
+    // ENHANCED LOGGING: Track what's being served to client
+    const fileStats = fs.statSync(audioPath);
+    
+    // Read first 16 bytes for file signature detection
+    const fileHandle = fs.openSync(audioPath, 'r');
+    const fileBuffer = Buffer.alloc(16);
+    fs.readSync(fileHandle, fileBuffer, 0, 16, 0);
+    fs.closeSync(fileHandle);
+    
+    const fileSignature = fileBuffer.toString('hex').toUpperCase().match(/.{1,2}/g)?.join(' ') || '';
+    
+    // Detect format from file signature
+    let detectedFormat = 'unknown';
+    const signatureHex = fileBuffer.toString('hex').toUpperCase();
+    if (signatureHex.startsWith('667479704D344120')) { // ftypM4A
+      detectedFormat = 'M4A/AAC';
+    } else if (signatureHex.startsWith('1A45DFA3')) { // WebM
+      detectedFormat = 'WebM';
+    } else if (signatureHex.startsWith('52494646') && signatureHex.includes('57415645')) { // RIFF...WAVE
+      detectedFormat = 'WAV';
+    } else if (signatureHex.startsWith('494433') || signatureHex.startsWith('FFFB') || signatureHex.startsWith('FFF3')) { // ID3 or MP3
+      detectedFormat = 'MP3';
+    }
+
+    console.log('[WalkieTalkie] 📤 SERVING AUDIO TO CLIENT:', {
       messageId,
-      audioPath,
-      contentType,
-      ext,
-      fileExists: fs.existsSync(audioPath),
+      authenticatedUserId,
+      fromUserId: fromUserIdStr,
+      toUserId: toUserIdStr,
+      storedFilePath: audioPath,
+      storedFileExtension: finalExt,
+      storedFileSizeBytes: fileStats.size,
+      fileSignatureHex: fileSignature,
+      detectedFormatFromSignature: detectedFormat,
+      responseContentType: contentType,
+      contentTypeMatchesExtension: (
+        (finalExt === '.m4a' || finalExt === '.mp4') && contentType === 'audio/mp4' ||
+        finalExt === '.webm' && contentType === 'audio/webm' ||
+        finalExt === '.wav' && contentType === 'audio/wav' ||
+        (finalExt === '.mp3' || finalExt === '.mpeg') && contentType === 'audio/mpeg'
+      ),
+      isWatchOSCompatible: detectedFormat === 'M4A/AAC' || detectedFormat === 'WAV' || detectedFormat === 'MP3',
+      isWebM: detectedFormat === 'WebM',
+      warning: detectedFormat === 'WebM' ? '⚠️ WATCH WILL FAIL - WebM not supported on watchOS' : '✅ WatchOS compatible',
+      timestamp: new Date().toISOString(),
     });
 
     // Set headers and stream file
@@ -557,10 +853,7 @@ export const getAudio = async (req: Request, res: Response): Promise<void> => {
     res.setHeader('Content-Disposition', `inline; filename="${path.basename(audioPath)}"`);
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cache-Control', 'public, max-age=3600');
-    
-    // Get file stats for content length
-    const stats = fs.statSync(audioPath);
-    res.setHeader('Content-Length', stats.size);
+    res.setHeader('Content-Length', fileStats.size);
     
     const fileStream = fs.createReadStream(audioPath);
     

@@ -225,15 +225,40 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
       this.audioChunks = [];
       this.recordingStartTime = Date.now();
 
-      // Try to use WAV format, fallback to webm
-      const options: MediaRecorderOptions = {
-        mimeType: 'audio/webm;codecs=opus',
-      };
+      // ENHANCED: Try M4A/MP4 first (watchOS compatible), then fallback
+      const options: MediaRecorderOptions = {};
+      
+      // Priority: M4A/MP4 > WAV > WebM (for watchOS compatibility)
+      const supportedFormats = [
+        'audio/mp4',           // M4A (watchOS compatible) - preferred
+        'audio/m4a',           // M4A alternative
+        'audio/wav',           // WAV (watchOS compatible)
+        'audio/webm;codecs=opus', // WebM (needs conversion)
+        'audio/webm',          // WebM fallback
+      ];
 
-      // Check if WAV is supported (usually not, but try)
-      if (MediaRecorder.isTypeSupported('audio/wav')) {
-        options.mimeType = 'audio/wav';
+      let selectedFormat = 'audio/webm;codecs=opus'; // Default fallback
+      for (const format of supportedFormats) {
+        if (MediaRecorder.isTypeSupported(format)) {
+          selectedFormat = format;
+          break;
+        }
       }
+
+      options.mimeType = selectedFormat;
+
+      console.log('[WalkieTalkie] 🎤 RECORDING FORMAT SELECTION:', {
+        selectedFormat: selectedFormat,
+        isM4A: selectedFormat.includes('mp4') || selectedFormat.includes('m4a'),
+        isWAV: selectedFormat.includes('wav'),
+        isWebM: selectedFormat.includes('webm'),
+        isWatchOSCompatible: selectedFormat.includes('mp4') || selectedFormat.includes('m4a') || selectedFormat.includes('wav'),
+        supportedFormats: supportedFormats.map(f => ({
+          format: f,
+          supported: MediaRecorder.isTypeSupported(f),
+        })),
+        warning: selectedFormat.includes('webm') ? '⚠️ Will be converted to M4A on server' : '✅ Direct watchOS compatible',
+      });
 
       this.mediaRecorder = new MediaRecorder(stream, options);
 
@@ -245,7 +270,23 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
 
       this.mediaRecorder.onstop = () => {
         this.recordingDuration = Date.now() - this.recordingStartTime;
-        const audioBlob = new Blob(this.audioChunks, { type: this.mediaRecorder?.mimeType || 'audio/webm' });
+        const recordedMimeType = this.mediaRecorder?.mimeType || 'audio/webm';
+        const audioBlob = new Blob(this.audioChunks, { type: recordedMimeType });
+        
+        // ENHANCED LOGGING: Track what was recorded
+        console.log('[WalkieTalkie] 🛑 RECORDING STOPPED:', {
+          durationMs: this.recordingDuration,
+          recordedFormat: recordedMimeType,
+          blobSizeBytes: audioBlob.size,
+          blobType: audioBlob.type,
+          isM4A: recordedMimeType.includes('mp4') || recordedMimeType.includes('m4a'),
+          isWebM: recordedMimeType.includes('webm'),
+          isWAV: recordedMimeType.includes('wav'),
+          isWatchOSCompatible: recordedMimeType.includes('mp4') || recordedMimeType.includes('m4a') || recordedMimeType.includes('wav'),
+          willNeedConversion: recordedMimeType.includes('webm'),
+          timestamp: new Date().toISOString(),
+        });
+
         this.sendAudioMessage(audioBlob);
 
         // Stop all tracks
@@ -255,7 +296,7 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
 
       this.mediaRecorder.start();
       this.isRecording = true;
-      console.log('[WalkieTalkie] Recording started');
+      console.log('[WalkieTalkie] ▶️ Recording started with format:', options.mimeType);
     } catch (error: any) {
       console.error('[WalkieTalkie] Error starting recording:', error);
       this.toastService.show('Failed to access microphone', 'error');
@@ -306,6 +347,24 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
       const audioFile = new File([audioBlob], `audio.${extension}`, { type: audioBlob.type });
       const clientTimestamp = Date.now();
 
+      // ENHANCED LOGGING: Track what's being sent to server
+      console.log('[WalkieTalkie] 📤 SENDING TO SERVER:', {
+        fromUserId: this.currentUserId,
+        toUserId: this.selectedContactId,
+        fileName: audioFile.name,
+        fileExtension: extension,
+        fileMimeType: audioBlob.type,
+        fileSizeBytes: audioBlob.size,
+        isM4A: extension === 'm4a' || audioBlob.type.includes('mp4') || audioBlob.type.includes('m4a'),
+        isWebM: extension === 'webm' || audioBlob.type.includes('webm'),
+        isWAV: extension === 'wav' || audioBlob.type.includes('wav'),
+        isWatchOSCompatible: extension === 'm4a' || extension === 'wav' || extension === 'mp3',
+        willNeedServerConversion: extension === 'webm',
+        threadId: this.threadId,
+        clientTimestamp,
+        timestamp: new Date().toISOString(),
+      });
+
       const response = await this.walkieTalkieService
         .sendMessage(
           this.currentUserId,
@@ -317,6 +376,18 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
         .toPromise();
 
       if (response) {
+        // ENHANCED LOGGING: Track server response
+        console.log('[WalkieTalkie] ✅ SERVER RESPONSE RECEIVED:', {
+          messageId: response.messageId,
+          threadId: response.threadId,
+          audioUrl: response.audioUrl,
+          createdAt: response.createdAt,
+          serverConfirmedFormat: response.audioUrl.includes('.m4a') ? 'M4A' : 
+                                 response.audioUrl.includes('.webm') ? 'WebM' : 
+                                 response.audioUrl.includes('.wav') ? 'WAV' : 'Unknown',
+          timestamp: new Date().toISOString(),
+        });
+
         this.threadId = response.threadId;
 
         // Add sent message to local messages
@@ -340,7 +411,7 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
         }
 
         this.toastService.show('Message sent!', 'success');
-        console.log('[WalkieTalkie] Audio message sent successfully');
+        console.log('[WalkieTalkie] ✅ Audio message sent successfully');
       }
     } catch (error: any) {
       console.error('[WalkieTalkie] Error sending audio:', error);
@@ -410,7 +481,41 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
 
       // Create object URL from blob
       const blobUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(blobUrl);
+      const audio = new Audio();
+      
+      // CRITICAL FIX: Explicitly set src and wait for audio to load
+      audio.src = blobUrl;
+      audio.load(); // Force audio to load the blob URL
+
+      // Wait for audio to be ready before playing
+      await new Promise<void>((resolve, reject) => {
+        const onCanPlay = () => {
+          audio.removeEventListener('canplay', onCanPlay);
+          audio.removeEventListener('error', onError);
+          resolve();
+        };
+
+        const onError = (error: Event) => {
+          audio.removeEventListener('canplay', onCanPlay);
+          audio.removeEventListener('error', onError);
+          reject(new Error('Audio failed to load'));
+        };
+
+        // If already ready, resolve immediately
+        if (audio.readyState >= 2) { // HAVE_CURRENT_DATA
+          resolve();
+        } else {
+          audio.addEventListener('canplay', onCanPlay);
+          audio.addEventListener('error', onError);
+          
+          // Timeout after 5 seconds
+          setTimeout(() => {
+            audio.removeEventListener('canplay', onCanPlay);
+            audio.removeEventListener('error', onError);
+            reject(new Error('Audio load timeout'));
+          }, 5000);
+        }
+      });
 
       audio.onended = () => {
         URL.revokeObjectURL(blobUrl);

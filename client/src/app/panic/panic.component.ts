@@ -1431,8 +1431,8 @@ export class PanicComponent implements OnInit, OnDestroy {
     this.conversationId = null; // Reset conversationId for new conversation
     this.isTriggering = false;
 
-    // Request initial AI message
-    this.requestInitialAIMessage();
+    // REMOVED: Auto-send "Start" message - assistant must wait for user to type
+    // Chat panel opens but no API call is made until user sends a message
   }
 
   requestInitialAIMessage(): void {
@@ -1539,6 +1539,7 @@ export class PanicComponent implements OnInit, OnDestroy {
           success: response.success,
           messageLength: response.message?.length || 0,
           conversationId: response.conversationId || 'none',
+          hasAction: !!response.action,
         });
 
         // Store conversationId from response
@@ -1546,6 +1547,20 @@ export class PanicComponent implements OnInit, OnDestroy {
           this.conversationId = response.conversationId;
           console.log('[Panic] Received conversationId:', this.conversationId);
         }
+        
+        // Check for breathing exercise action
+        if (response.action?.type === 'BREATHING_EXERCISE') {
+          console.log('[Panic] Breathing exercise action detected, navigating to breathing page');
+          const payload = response.action.payload;
+          this.router.navigate(['/breathing'], {
+            state: {
+              pattern: payload.pattern || '4-4-6',
+              cycles: payload.cycles || 6
+            }
+          });
+          return; // Don't add message to chat if navigating away
+        }
+        
         // Use message field (new format) or reply field (legacy)
         const aiMessage = response.message || response.reply;
         if (response.success && aiMessage) {
@@ -1710,6 +1725,19 @@ export class PanicComponent implements OnInit, OnDestroy {
           if (response.conversationId) {
             this.conversationId = response.conversationId;
             console.log('[Panic] Received conversationId:', this.conversationId);
+          }
+
+          // Check for breathing exercise action
+          if (response.action?.type === 'BREATHING_EXERCISE') {
+            console.log('[Panic] Breathing exercise action detected, navigating to breathing page');
+            const payload = response.action.payload;
+            this.router.navigate(['/breathing'], {
+              state: {
+                pattern: payload.pattern || '4-4-6',
+                cycles: payload.cycles || 6
+              }
+            });
+            return; // Don't add message to chat if navigating away
           }
 
           // Get AI response

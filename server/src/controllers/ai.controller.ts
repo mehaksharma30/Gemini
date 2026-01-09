@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import Post from '../models/Post';
-import { askOllama } from '../services/ollamaService';
+import { getAIResponse } from '../services/aiPanic.service';
 
 interface RecommendedPost {
   postId: string;
@@ -104,6 +104,18 @@ export const aiChat = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'Question is required' });
     }
 
+    // CRITICAL: Check for OpenAI API key - throw clear error if missing
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      const error = new Error('OPENAI_API_KEY is required for AI Talk. Please configure it in your environment variables.');
+      console.error('[AI Chat] ERROR:', error.message);
+      return res.status(500).json({
+        success: false,
+        message: 'AI service is not configured. Please contact support.',
+        error: error.message,
+      });
+    }
+
     const similarPosts = await findSimilarPosts(question);
 
     let context = '';
@@ -117,7 +129,29 @@ export const aiChat = async (req: Request, res: Response) => {
       context = 'No directly similar posts found in the community yet, but I can still offer support.';
     }
 
-    const answer = await askOllama(question.trim(), context);
+    // Build prompt for OpenAI (similar to panic chat but with AI Talk system prompt)
+    const systemPrompt = `You are the MindMemos AI Companion, a supportive peer support assistant for a mental health journaling app.
+
+Your role:
+- Provide empathetic, supportive responses to users sharing their mental health experiences
+- Use warm, compassionate, non-clinical language
+- Help users feel heard and validated
+- Suggest healthy coping strategies when appropriate
+- Reference the similar experiences shared by other MindMemos users when relevant
+
+IMPORTANT SAFETY RULES:
+- You are NOT a licensed mental health professional
+- You CANNOT provide medical diagnosis or treatment
+- You MUST NOT give advice about self-harm or harmful behavior
+- Always remind users that this is peer support, not professional care
+- If someone appears to be in crisis, gently encourage them to contact a professional or crisis line
+
+Always end your responses with a gentle reminder about seeking professional help when needed.`;
+
+    const prompt = `System: ${systemPrompt}\n\n${context}User's question: ${question.trim()}`;
+
+    // ALWAYS use OpenAI (gpt-5-mini) - never Ollama
+    const answer = await getAIResponse(prompt);
 
     return res.json({
       success: true,
@@ -128,8 +162,8 @@ export const aiChat = async (req: Request, res: Response) => {
     console.error('AI chat error:', error);
 
     let message = 'AI service is currently unavailable';
-    if (error.message.includes('Ollama server is not running')) {
-      message = 'AI companion is offline. Please make sure Ollama is running.';
+    if (error.message.includes('OpenAI API key not configured') || error.message.includes('OPENAI_API_KEY')) {
+      message = 'AI service is not configured. Please contact support.';
     }
 
     return res.status(500).json({

@@ -15,11 +15,20 @@ export interface PanicChatRequest {
   detectedLang?: 'en'; // Optional: detected language from STT (always 'en' - English only)
 }
 
+export interface BreathingAction {
+  type: 'BREATHING_EXERCISE';
+  payload: {
+    pattern: string;
+    cycles: number;
+  };
+}
+
 export interface PanicChatResponse {
   success: boolean;
   message: string;
   conversationId?: string;
   reply?: string; // Legacy field for backward compatibility
+  action?: BreathingAction; // Optional action (e.g., breathing exercise)
 }
 
 @Injectable({
