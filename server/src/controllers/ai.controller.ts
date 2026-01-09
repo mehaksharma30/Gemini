@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import Post from '../models/Post';
-import { getAIResponse } from '../services/aiPanic.service';
+import { getOpenAIText } from '../services/openaiChat.service';
 
 interface RecommendedPost {
   postId: string;
@@ -148,10 +148,10 @@ IMPORTANT SAFETY RULES:
 
 Always end your responses with a gentle reminder about seeking professional help when needed.`;
 
-    const prompt = `System: ${systemPrompt}\n\n${context}User's question: ${question.trim()}`;
-
     // ALWAYS use OpenAI (gpt-5-mini) - never Ollama
-    const answer = await getAIResponse(prompt);
+    const answer = await getOpenAIText(systemPrompt, [
+      { role: 'user', content: `${context}User's question: ${question.trim()}` }
+    ]);
 
     return res.json({
       success: true,

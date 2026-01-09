@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import Post from '../models/Post';
 import User from '../models/User';
-import { getSearchKeywordsFromOllama } from '../services/ollamaSearchService';
+import { getSearchKeywordsFromOpenAI } from '../services/openaiChat.service';
 
 interface PostSnippet {
   postId: string;
@@ -30,7 +30,7 @@ export const searchUsersByTopic = async (req: Request, res: Response) => {
 
     const searchQuery = query.trim();
 
-    const keywords = await getSearchKeywordsFromOllama(searchQuery);
+    const keywords = await getSearchKeywordsFromOpenAI(searchQuery);
 
     if (keywords.length === 0) {
       return res.json({
