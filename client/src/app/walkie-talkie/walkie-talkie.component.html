@@ -1,6 +1,6 @@
 <div class="walkie-talkie-container">
   <div class="header">
-    <h1>Walkie-Talkie</h1>
+    <h1>Talk with user</h1>
     <p class="subtitle">User-to-user voice messaging</p>
   </div>
 
@@ -31,56 +31,26 @@
       <h2>{{ selectedContact.username }}</h2>
     </div>
 
-    <!-- Messages -->
-    <div class="messages-container" #messagesContainer>
-      <div *ngIf="messages.length === 0" class="empty-state">
-        <p>No messages yet. Start by recording a voice message!</p>
-      </div>
-
-      <div *ngFor="let message of messages" class="message" [class.sent]="isFromCurrentUser(message)" [class.received]="!isFromCurrentUser(message)">
-        <div class="message-content">
-          <div class="message-header">
-            <span class="sender">{{ isFromCurrentUser(message) ? 'You' : selectedContact.username }}</span>
-            <span class="timestamp">{{ formatTime(message.createdAt) }}</span>
-          </div>
-          <button 
-            class="play-audio-btn" 
-            (click)="playAudio(message.audioUrl)"
-            [disabled]="isAudioPlaying()"
-            type="button"
-          >
-            <span *ngIf="isAudioPlaying()">⏸️ Playing...</span>
-            <span *ngIf="!isAudioPlaying()">▶️ Play</span>
-          </button>
-        </div>
-      </div>
+    <!-- Messages - Hidden, auto-play only (backend handles auto-play) -->
+    <div class="messages-container" #messagesContainer style="display: none;">
+      <!-- Messages are received and auto-played, but not displayed in UI -->
     </div>
 
     <!-- Recording Controls -->
     <div class="input-container">
-      <div class="recording-status" *ngIf="isRecording">
-        <span class="recording-indicator">🔴 Recording...</span>
-        <span class="recording-duration">{{ getRecordingDuration() }}s</span>
-      </div>
-
       <div class="audio-controls">
         <button
-          *ngIf="!isRecording"
-          (click)="startRecording()"
+          (click)="isRecording ? stopRecording() : startRecording()"
           [disabled]="isSending"
-          class="record-btn"
+          class="mic-button"
+          [class.recording]="isRecording"
           type="button"
+          title="{{ isRecording ? 'Stop recording' : 'Start recording' }}"
         >
-          🎤 Record (3-10s)
+          <span *ngIf="!isRecording">🎤</span>
+          <span *ngIf="isRecording">🔴</span>
         </button>
-        <button
-          *ngIf="isRecording"
-          (click)="stopRecording()"
-          class="stop-btn"
-          type="button"
-        >
-          ⏹️ Stop & Send
-        </button>
+        <p class="mic-instruction">Click to start recording</p>
       </div>
 
       <div *ngIf="isSending" class="sending-status">

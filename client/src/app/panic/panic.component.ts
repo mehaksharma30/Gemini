@@ -47,59 +47,15 @@ import { environment } from '../../environments/environment';
             </button>
 
             <button
-              class="mode-btn contact-mode"
-              (click)="showContactSelection = !showContactSelection"
-              [disabled]="isTriggering || contacts.length === 0"
-            >
-              <span class="icon">📞</span>
-              <span>Alert One Contact</span>
-            </button>
-
-            <button
-              class="mode-btn group-mode"
-              (click)="triggerGroup()"
-              [disabled]="isTriggering || contacts.length === 0"
-            >
-              <span class="icon">👥</span>
-              <span>Alert All Contacts</span>
-            </button>
-
-            <button
               class="mode-btn walkie-talkie-mode"
               (click)="openWalkieTalkie()"
               [disabled]="isTriggering"
             >
-              <span class="icon">📻</span>
-              <span>Walkie-Talkie</span>
+              <span class="icon">💬</span>
+              <span>Talk to User</span>
             </button>
           </div>
 
-          <div class="contact-selection" *ngIf="showContactSelection && contacts.length > 0">
-            <h3>Select a contact:</h3>
-            <div class="contacts-list">
-              <label
-                *ngFor="let contact of contacts"
-                class="contact-option"
-                [class.selected]="selectedContactId === contact.id"
-              >
-                <input
-                  type="radio"
-                  [value]="contact.id"
-                  [(ngModel)]="selectedContactId"
-                  name="contact"
-                />
-                <span class="contact-avatar">{{ getInitials(contact.username) }}</span>
-                <span class="contact-name">{{ contact.username }}</span>
-              </label>
-            </div>
-            <button
-              class="send-alert-btn"
-              (click)="triggerContact()"
-              [disabled]="!selectedContactId || isTriggering"
-            >
-              Send Alert
-            </button>
-          </div>
 
           <div class="ai-chat-panel" *ngIf="showAIChat">
             <div class="chat-header">
@@ -192,6 +148,20 @@ import { environment } from '../../environments/environment';
             </div>
           </div>
 
+          <!-- Emergency Contacts -->
+          <div class="emergency-contacts-section">
+            <h3>Emergency Contacts</h3>
+            <div class="emergency-contacts-list" *ngIf="contacts.length > 0">
+              <div *ngFor="let contact of contacts" class="emergency-contact-item">
+                <div class="contact-avatar">{{ getInitials(contact.username) }}</div>
+                <div class="contact-info">
+                  <span class="contact-name">{{ contact.username }}</span>
+                </div>
+              </div>
+            </div>
+            <p *ngIf="contacts.length === 0" class="no-emergency-contacts">No emergency contacts added yet.</p>
+          </div>
+
           <!-- Voice Call - Super Simple -->
           <div class="testing-talk-panel">
             <h3>Voice Call</h3>
@@ -276,7 +246,7 @@ import { environment } from '../../environments/environment';
     }
     .panic-form {
       background: var(--card-gradient);
-      border: 1px solid var(--border-color);
+      border: 1px solid var(--c-accent);
       padding: 2rem;
       border-radius: 16px;
       box-shadow: 0 10px 40px var(--shadow-lg);
@@ -291,7 +261,7 @@ import { environment } from '../../environments/environment';
     .message-input {
       padding: 1rem;
       border-radius: 10px;
-      border: 2px solid var(--border-color);
+      border: 2px solid var(--c-accent);
       background: var(--bg-secondary);
       color: var(--text-primary);
       font-family: inherit;
@@ -301,8 +271,8 @@ import { environment } from '../../environments/environment';
     }
     .message-input:focus {
       outline: none;
-      border-color: var(--teal-accent);
-      box-shadow: 0 0 0 3px rgba(118, 171, 174, 0.1);
+      border-color: var(--c-accent);
+      box-shadow: 0 0 0 3px rgba(0, 255, 136, 0.1);
     }
     .mode-buttons {
       display: flex;
@@ -316,37 +286,41 @@ import { environment } from '../../environments/environment';
       gap: 1rem;
       padding: 1.25rem 1.5rem;
       border-radius: 12px;
-      border: 2px solid var(--border-color);
-      background: var(--bg-secondary);
-      color: var(--text-primary);
+      border: 2px solid var(--c-accent);
+      background: var(--c-bg-1);
+      color: var(--c-accent);
       font-size: 1.1rem;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.3s ease;
     }
     .mode-btn:hover:not(:disabled) {
+      background: var(--c-accent);
+      color: var(--c-bg-1);
       transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      box-shadow: 0 4px 12px rgba(0, 255, 136, 0.3);
     }
     .mode-btn:disabled {
       opacity: 0.5;
       cursor: not-allowed;
+      border-color: rgba(0, 255, 136, 0.3);
+      color: rgba(0, 255, 136, 0.3);
     }
     .mode-btn.ai-mode:hover:not(:disabled) {
-      border-color: var(--teal-accent);
-      background: rgba(118, 171, 174, 0.1);
+      background: var(--c-accent);
+      color: var(--c-bg-1);
     }
     .mode-btn.contact-mode:hover:not(:disabled) {
-      border-color: #3b82f6;
-      background: rgba(59, 130, 246, 0.1);
+      background: var(--c-accent);
+      color: var(--c-bg-1);
     }
     .mode-btn.group-mode:hover:not(:disabled) {
-      border-color: #8b5cf6;
-      background: rgba(139, 92, 246, 0.1);
+      background: var(--c-accent);
+      color: var(--c-bg-1);
     }
     .mode-btn.walkie-talkie-mode:hover:not(:disabled) {
-      border-color: #10b981;
-      background: rgba(16, 185, 129, 0.1);
+      background: var(--c-accent);
+      color: var(--c-bg-1);
     }
     .icon {
       font-size: 1.5rem;
@@ -356,7 +330,7 @@ import { environment } from '../../environments/environment';
       padding: 1.5rem;
       background: var(--bg-tertiary);
       border-radius: 12px;
-      border: 1px solid var(--border-color);
+      border: 1px solid var(--c-accent);
     }
     .contact-selection h3 {
       margin: 0 0 1rem 0;
@@ -375,18 +349,18 @@ import { environment } from '../../environments/environment';
       gap: 1rem;
       padding: 0.75rem;
       border-radius: 8px;
-      border: 2px solid var(--border-color);
+      border: 2px solid var(--c-accent);
       background: var(--bg-secondary);
       cursor: pointer;
       transition: all 0.2s;
     }
     .contact-option:hover {
-      border-color: var(--teal-accent);
-      background: rgba(118, 171, 174, 0.1);
+      border-color: var(--c-accent);
+      background: rgba(0, 255, 136, 0.1);
     }
     .contact-option.selected {
-      border-color: var(--teal-accent);
-      background: rgba(118, 171, 174, 0.2);
+      border-color: var(--c-accent);
+      background: rgba(0, 255, 136, 0.2);
     }
     .contact-option input[type="radio"] {
       margin: 0;
@@ -410,23 +384,65 @@ import { environment } from '../../environments/environment';
       font-weight: 500;
       color: var(--text-primary);
     }
+    .emergency-contacts-section {
+      margin-top: 1.5rem;
+      padding: 1.5rem;
+      background: var(--card-gradient);
+      border: 1px solid var(--c-accent);
+      border-radius: 12px;
+    }
+    .emergency-contacts-section h3 {
+      margin: 0 0 1rem 0;
+      font-size: 1.2rem;
+      color: var(--c-accent);
+      font-weight: 600;
+    }
+    .emergency-contacts-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .emergency-contact-item {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.75rem;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      border: 1px solid var(--c-accent);
+    }
+    .emergency-contact-item .contact-info {
+      flex: 1;
+    }
+    .emergency-contact-item .contact-name {
+      font-weight: 500;
+      color: var(--c-accent);
+      font-size: 0.95rem;
+    }
+    .no-emergency-contacts {
+      text-align: center;
+      color: var(--text-secondary);
+      padding: 1rem;
+      font-size: 0.9rem;
+    }
     .send-alert-btn {
       width: 100%;
       padding: 0.85rem;
       border-radius: 8px;
-      border: none;
-      background: var(--button-gradient);
-      color: var(--light-gray);
+      border: 2px solid var(--c-accent);
+      background: var(--c-bg-1);
+      color: var(--c-accent);
       font-size: 1rem;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.3s ease;
-      box-shadow: 0 2px 8px rgba(118, 171, 174, 0.3);
+      box-shadow: 0 2px 8px rgba(0, 255, 136, 0.2);
     }
     .send-alert-btn:hover:not(:disabled) {
+      background: var(--c-accent);
+      color: var(--c-bg-1);
       transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(118, 171, 174, 0.4);
-      background: var(--button-hover);
+      box-shadow: 0 4px 12px rgba(0, 255, 136, 0.4);
     }
     .send-alert-btn:disabled {
       opacity: 0.5;
@@ -449,7 +465,7 @@ import { environment } from '../../environments/environment';
     .ai-chat-panel {
       margin-top: 1.5rem;
       background: var(--bg-tertiary);
-      border: 1px solid var(--border-color);
+      border: 1px solid var(--c-accent);
       border-radius: 12px;
       display: flex;
       flex-direction: column;
@@ -461,7 +477,7 @@ import { environment } from '../../environments/environment';
       justify-content: space-between;
       align-items: center;
       padding: 1rem 1.5rem;
-      border-bottom: 1px solid var(--border-color);
+      border-bottom: 1px solid var(--c-accent);
       background: var(--card-gradient);
     }
     .chat-header h3 {
@@ -477,7 +493,7 @@ import { environment } from '../../environments/environment';
     }
     .voice-toggle-btn {
       background: var(--button-gradient);
-      border: 2px solid var(--teal-accent);
+      border: 2px solid var(--c-accent);
       border-radius: 50%;
       width: 44px;
       height: 44px;
@@ -487,7 +503,7 @@ import { environment } from '../../environments/environment';
       cursor: pointer;
       transition: all 0.3s;
       font-size: 1.5rem;
-      box-shadow: 0 2px 8px rgba(118, 171, 174, 0.3);
+      box-shadow: 0 2px 8px rgba(77, 115, 76, 0.3);
       position: relative;
     }
     .voice-toggle-btn:hover:not(:disabled) {
@@ -530,7 +546,7 @@ import { environment } from '../../environments/environment';
       width: 40px;
       height: 40px;
       border-radius: 50%;
-      border: 2px solid var(--teal-accent);
+      border: 2px solid var(--c-accent);
       background: var(--button-gradient);
       color: var(--light-gray);
       cursor: pointer;
@@ -540,12 +556,12 @@ import { environment } from '../../environments/environment';
       transition: all 0.3s ease;
       flex-shrink: 0;
       font-size: 1.1rem;
-      box-shadow: 0 2px 8px rgba(118, 171, 174, 0.3);
+      box-shadow: 0 2px 8px rgba(77, 115, 76, 0.3);
       margin-left: 0.5rem;
     }
     .speaker-btn:hover:not(:disabled) {
       transform: scale(1.1);
-      box-shadow: 0 4px 12px rgba(118, 171, 174, 0.4);
+      box-shadow: 0 4px 12px rgba(77, 115, 76, 0.4);
       background: var(--button-hover);
     }
     .speaker-btn.active,
@@ -568,7 +584,7 @@ import { environment } from '../../environments/environment';
     .voice-status {
       padding: 0.5rem 1.5rem;
       background: var(--bg-tertiary);
-      border-bottom: 1px solid var(--border-color);
+      border-bottom: 1px solid var(--c-accent);
       font-size: 0.85rem;
     }
     .status-indicator {
@@ -634,7 +650,7 @@ import { environment } from '../../environments/environment';
     .chat-message.assistant .message-bubble {
       background: var(--card-gradient);
       color: var(--text-primary);
-      border: 1px solid var(--border-color);
+      border: 1px solid var(--c-accent);
       border-bottom-left-radius: 4px;
     }
     .message-bubble p {
@@ -668,7 +684,7 @@ import { environment } from '../../environments/environment';
       display: flex;
       gap: 0.75rem;
       padding: 1rem 1.5rem;
-      border-top: 1px solid var(--border-color);
+      border-top: 1px solid var(--c-accent);
       background: var(--card-gradient);
       align-items: center;
       position: relative;
@@ -676,7 +692,7 @@ import { environment } from '../../environments/environment';
     .voice-record-btn {
       padding: 0.75rem 1.25rem;
       border-radius: 24px;
-      border: 2px solid var(--teal-accent);
+      border: 2px solid var(--c-accent);
       background: var(--button-gradient);
       color: var(--light-gray);
       font-size: 0.95rem;
@@ -684,7 +700,7 @@ import { environment } from '../../environments/environment';
       cursor: pointer;
       transition: all 0.3s;
       white-space: nowrap;
-      box-shadow: 0 2px 8px rgba(118, 171, 174, 0.3);
+      box-shadow: 0 2px 8px rgba(77, 115, 76, 0.3);
       display: flex;
       align-items: center;
       gap: 0.5rem;
@@ -712,7 +728,7 @@ import { environment } from '../../environments/environment';
     .chat-input {
       flex: 1;
       padding: 0.75rem 1rem;
-      border: 1px solid var(--border-color);
+      border: 1px solid var(--c-accent);
       border-radius: 24px;
       background: var(--bg-secondary);
       color: var(--text-primary);
@@ -724,7 +740,7 @@ import { environment } from '../../environments/environment';
     .chat-input:focus {
       outline: none;
       border-color: var(--teal-accent);
-      box-shadow: 0 0 0 3px rgba(118, 171, 174, 0.1);
+      box-shadow: 0 0 0 3px rgba(77, 115, 76, 0.1);
     }
     .chat-input:disabled {
       opacity: 0.6;
@@ -743,11 +759,11 @@ import { environment } from '../../environments/environment';
       justify-content: center;
       transition: all 0.3s ease;
       flex-shrink: 0;
-      box-shadow: 0 2px 8px rgba(118, 171, 174, 0.3);
+      box-shadow: 0 2px 8px rgba(77, 115, 76, 0.3);
     }
     .send-chat-btn:hover:not(:disabled) {
       transform: scale(1.1);
-      box-shadow: 0 4px 12px rgba(118, 171, 174, 0.4);
+      box-shadow: 0 4px 12px rgba(77, 115, 76, 0.4);
       background: var(--button-hover);
     }
     .send-chat-btn:disabled {
@@ -763,7 +779,7 @@ import { environment } from '../../environments/environment';
       width: 44px;
       height: 44px;
       border-radius: 50%;
-      border: 2px solid var(--teal-accent);
+      border: 2px solid var(--c-accent);
       background: var(--button-gradient);
       color: var(--light-gray);
       cursor: pointer;
@@ -773,11 +789,11 @@ import { environment } from '../../environments/environment';
       transition: all 0.3s ease;
       flex-shrink: 0;
       font-size: 1.2rem;
-      box-shadow: 0 2px 8px rgba(118, 171, 174, 0.3);
+      box-shadow: 0 2px 8px rgba(77, 115, 76, 0.3);
     }
     .mic-btn:hover:not(:disabled) {
       transform: scale(1.1);
-      box-shadow: 0 4px 12px rgba(118, 171, 174, 0.4);
+      box-shadow: 0 4px 12px rgba(77, 115, 76, 0.4);
       background: var(--button-hover);
     }
     .mic-btn.active {
@@ -796,7 +812,7 @@ import { environment } from '../../environments/environment';
       left: 50%;
       transform: translateX(-50%);
       background: var(--card-gradient);
-      border: 1px solid var(--border-color);
+      border: 1px solid var(--c-accent);
       padding: 0.5rem 1rem;
       border-radius: 8px;
       font-size: 0.85rem;
@@ -822,7 +838,7 @@ import { environment } from '../../environments/environment';
     .testing-talk-panel {
       margin-top: 2rem;
       background: var(--card-gradient);
-      border: 1px solid var(--border-color);
+      border: 1px solid var(--c-accent);
       padding: 1.5rem;
       border-radius: 12px;
       text-align: center;
@@ -830,14 +846,14 @@ import { environment } from '../../environments/environment';
     .testing-talk-panel h3 {
       margin: 0 0 1rem 0;
       font-size: 1.2rem;
-      color: var(--text-primary);
+      color: var(--c-accent);
     }
     .contact-select {
       width: 100%;
       max-width: 300px;
       padding: 0.75rem;
       border-radius: 8px;
-      border: 2px solid var(--border-color);
+      border: 2px solid var(--c-accent);
       background: var(--bg-secondary);
       color: var(--text-primary);
       font-size: 1rem;
@@ -862,11 +878,11 @@ import { environment } from '../../environments/environment';
       padding: 1rem;
       background: var(--bg-secondary);
       border-radius: 8px;
-      border: 1px solid var(--border-color);
+      border: 1px solid var(--c-accent);
     }
     .contact-call-item .contact-name {
       font-weight: 600;
-      color: var(--text-primary);
+      color: var(--c-accent);
       font-size: 1rem;
     }
     .btn-call-direct {
@@ -914,18 +930,30 @@ import { environment } from '../../environments/environment';
     .btn-record, .btn-mute, .btn-end {
       padding: 0.75rem 1.25rem;
       border-radius: 8px;
-      border: none;
+      border: 2px solid var(--c-accent);
+      background: var(--c-bg-1);
+      color: var(--c-accent);
       font-size: 1rem;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.2s;
     }
-    .btn-record {
-      background: var(--green-accent);
-      color: white;
+    .btn-record:hover:not(:disabled) {
+      background: var(--c-accent);
+      color: var(--c-bg-1);
     }
     .btn-record.recording {
-      background: var(--red-accent);
+      background: var(--c-accent);
+      color: var(--c-bg-1);
+    }
+    .btn-mute:hover:not(:disabled) {
+      background: var(--c-accent);
+      color: var(--c-bg-1);
+    }
+    .btn-end:hover:not(:disabled) {
+      background: #dc3545;
+      color: white;
+      border-color: #dc3545;
     }
     .btn-mute {
       background: var(--gray-accent);
@@ -951,14 +979,14 @@ import { environment } from '../../environments/environment';
       padding: 1.5rem;
       background: var(--bg-tertiary);
       border-radius: 12px;
-      border: 2px solid var(--border-color);
+      border: 2px solid var(--c-accent);
       text-align: center;
     }
     .quick-test-btn {
       width: 100%;
       padding: 1.25rem 2rem;
       border-radius: 12px;
-      border: 3px solid var(--border-color);
+      border: 3px solid var(--c-accent);
       background: var(--bg-secondary);
       color: var(--text-primary);
       font-size: 1.1rem;
@@ -1046,7 +1074,7 @@ import { environment } from '../../environments/environment';
     .test-contact-select {
       padding: 0.75rem 1rem;
       border-radius: 8px;
-      border: 2px solid var(--border-color);
+      border: 2px solid var(--c-accent);
       background: var(--bg-secondary);
       color: var(--text-primary);
       font-family: inherit;
@@ -1057,7 +1085,7 @@ import { environment } from '../../environments/environment';
     .test-contact-select:focus {
       outline: none;
       border-color: var(--teal-accent);
-      box-shadow: 0 0 0 3px rgba(118, 171, 174, 0.1);
+      box-shadow: 0 0 0 3px rgba(77, 115, 76, 0.1);
     }
     .test-contact-select:disabled {
       opacity: 0.5;
@@ -1076,7 +1104,7 @@ import { environment } from '../../environments/environment';
       padding: 1rem;
       background: var(--bg-tertiary);
       border-radius: 8px;
-      border: 1px solid var(--border-color);
+      border: 1px solid var(--c-accent);
     }
     .status-item {
       display: flex;
@@ -1131,7 +1159,7 @@ import { environment } from '../../environments/environment';
       min-width: 120px;
       padding: 0.75rem 1.5rem;
       border-radius: 8px;
-      border: 2px solid var(--border-color);
+      border: 2px solid var(--c-accent);
       background: var(--bg-secondary);
       color: var(--text-primary);
       font-size: 1rem;
@@ -1252,7 +1280,7 @@ import { environment } from '../../environments/environment';
     .modal-content {
       position: relative;
       background: var(--card-gradient);
-      border: 2px solid var(--teal-accent);
+      border: 2px solid var(--c-accent);
       border-radius: 16px;
       padding: 2rem;
       max-width: 400px;

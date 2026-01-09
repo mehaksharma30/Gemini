@@ -629,6 +629,15 @@ export class MessagesComponent implements OnInit, OnDestroy {
     if (targetUserId) {
       this.openConversationWithUser(targetUserId);
     }
+
+    // Check for conversationId in query params (from widget)
+    const conversationId = this.route.snapshot.queryParams['conversationId'];
+    if (conversationId) {
+      const conv = this.conversations.find(c => c.conversationId === conversationId);
+      if (conv) {
+        this.selectConversation(conv);
+      }
+    }
   }
 
   ngOnDestroy(): void {

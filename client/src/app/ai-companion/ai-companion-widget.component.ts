@@ -123,10 +123,10 @@ interface ChatMessage {
       width: 64px;
       height: 64px;
       border-radius: 50%;
-      border: none;
-      background: var(--button-gradient);
-      color: var(--light-gray);
-      box-shadow: 0 4px 16px rgba(118, 171, 174, 0.4);
+      border: 2px solid var(--c-accent);
+      background: var(--c-bg-1);
+      color: var(--c-accent);
+      box-shadow: 0 4px 16px rgba(0, 255, 136, 0.3);
       cursor: pointer;
       z-index: 1000;
       display: flex;
@@ -138,9 +138,10 @@ interface ChatMessage {
     }
 
     .ai-fab:hover {
+      background: var(--c-accent);
+      color: var(--c-bg-1);
       transform: scale(1.1);
-      box-shadow: 0 6px 20px rgba(118, 171, 174, 0.5);
-      background: var(--button-hover);
+      box-shadow: 0 6px 20px rgba(0, 255, 136, 0.5);
     }
 
     .ai-fab .icon {
@@ -209,9 +210,9 @@ interface ChatMessage {
       width: 32px;
       height: 32px;
       border-radius: 50%;
-      border: none;
-      background: rgba(118, 171, 174, 0.2);
-      color: var(--light-gray);
+      border: 2px solid var(--c-accent);
+      background: var(--c-bg-1);
+      color: var(--c-accent);
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -220,7 +221,8 @@ interface ChatMessage {
     }
 
     .close-btn:hover {
-      background: rgba(118, 171, 174, 0.3);
+      background: var(--c-accent);
+      color: var(--c-bg-1);
       transform: rotate(90deg);
     }
 
@@ -275,17 +277,18 @@ interface ChatMessage {
     }
 
     .ai-message.user .message-bubble {
-      background: var(--button-gradient);
-      color: var(--light-gray);
+      background: var(--c-bg-1);
+      border: 2px solid var(--c-accent);
+      color: var(--c-accent);
       margin-left: auto;
       border-bottom-right-radius: 4px;
-      box-shadow: 0 2px 8px rgba(118, 171, 174, 0.2);
+      box-shadow: 0 2px 8px rgba(0, 255, 136, 0.2);
     }
 
     .ai-message.ai .message-bubble {
-      background: var(--card-gradient);
+      background: var(--c-bg-1);
       color: var(--text-primary);
-      border: 1px solid var(--border-color);
+      border: 1px solid var(--c-accent);
       border-bottom-left-radius: 4px;
     }
 
@@ -330,9 +333,9 @@ interface ChatMessage {
     .ai-recommendations {
       margin-top: 0.75rem;
       padding: 0.75rem;
-      background: rgba(118, 171, 174, 0.1);
+      background: rgba(0, 255, 136, 0.1);
       border-radius: 12px;
-      border: 1px solid rgba(118, 171, 174, 0.3);
+      border: 1px solid var(--c-accent);
     }
 
     .rec-header {
@@ -358,9 +361,9 @@ interface ChatMessage {
     }
 
     .rec-item:hover {
-      border-color: var(--teal-accent);
+      border-color: var(--c-accent);
       transform: translateX(4px);
-      background: rgba(118, 171, 174, 0.1);
+      background: rgba(0, 255, 136, 0.1);
     }
 
     .rec-content {
@@ -387,13 +390,13 @@ interface ChatMessage {
     }
 
     .tag {
-      background: rgba(118, 171, 174, 0.2);
-      color: var(--teal-accent);
+      background: var(--c-bg-1);
+      color: var(--c-accent);
       padding: 0.2rem 0.5rem;
       border-radius: 12px;
       font-size: 0.75rem;
       font-weight: 500;
-      border: 1px solid rgba(118, 171, 174, 0.3);
+      border: 1px solid var(--c-accent);
     }
 
     .ai-input-area {
@@ -419,8 +422,8 @@ interface ChatMessage {
 
     .ai-input:focus {
       outline: none;
-      border-color: var(--teal-accent);
-      box-shadow: 0 0 0 3px rgba(118, 171, 174, 0.1);
+      border-color: var(--c-accent);
+      box-shadow: 0 0 0 3px rgba(0, 255, 136, 0.1);
     }
 
     .ai-input:disabled {
@@ -432,9 +435,9 @@ interface ChatMessage {
       width: 40px;
       height: 40px;
       border-radius: 50%;
-      border: none;
-      background: var(--button-gradient);
-      color: var(--light-gray);
+      border: 2px solid var(--c-accent);
+      background: var(--c-bg-1);
+      color: var(--c-accent);
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -442,13 +445,14 @@ interface ChatMessage {
       transition: all 0.3s ease;
       flex-shrink: 0;
       align-self: flex-end;
-      box-shadow: 0 2px 8px rgba(118, 171, 174, 0.3);
+      box-shadow: 0 2px 8px rgba(0, 255, 136, 0.2);
     }
 
     .send-btn:hover:not(:disabled) {
+      background: var(--c-accent);
+      color: var(--c-bg-1);
       transform: scale(1.1);
-      box-shadow: 0 4px 12px rgba(118, 171, 174, 0.4);
-      background: var(--button-hover);
+      box-shadow: 0 4px 12px rgba(0, 255, 136, 0.4);
     }
 
     .send-btn:disabled {

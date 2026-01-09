@@ -6,17 +6,22 @@ import { Post } from '../../core/models/post.model';
 import { AuthService } from '../../core/services/auth.service';
 import { PostCardComponent } from '../post-card/post-card.component';
 import { AiCompanionWidgetComponent } from '../../ai-companion/ai-companion-widget.component';
+import { MessagesWidgetComponent } from '../../messages/messages-widget.component';
 
 @Component({
   selector: 'app-feed',
   standalone: true,
-  imports: [CommonModule, PostCardComponent, AiCompanionWidgetComponent],
+  imports: [CommonModule, PostCardComponent, AiCompanionWidgetComponent, MessagesWidgetComponent],
   template: `
     <div class="feed-container">
-      <div class="container">
+      <div class="feed-content">
         <div class="feed-header">
           <h1>Your Feed</h1>
           <p class="feed-subtitle">Connect through shared experiences</p>
+          <button class="new-post-btn" (click)="navigateToCreate()">
+            <span class="plus-icon">+</span>
+            <span>New Post</span>
+          </button>
         </div>
 
         <div class="state loading" *ngIf="loading">
@@ -46,8 +51,8 @@ import { AiCompanionWidgetComponent } from '../../ai-companion/ai-companion-widg
         </div>
       </div>
 
-      
       <app-ai-companion-widget></app-ai-companion-widget>
+      <app-messages-widget></app-messages-widget>
     </div>
   `,
   styles: [`
@@ -57,7 +62,7 @@ import { AiCompanionWidgetComponent } from '../../ai-companion/ai-companion-widg
       min-height: 100vh;
     }
 
-    .container {
+    .feed-content {
       max-width: 680px;
       margin: 0 auto;
     }
@@ -65,6 +70,45 @@ import { AiCompanionWidgetComponent } from '../../ai-companion/ai-companion-widg
     .feed-header {
       text-align: center;
       margin-bottom: 2rem;
+      position: relative;
+    }
+
+    .new-post-btn {
+      margin-top: 1rem;
+      padding: 0.75rem 1.5rem;
+      border-radius: 12px;
+      border: 2px solid var(--c-accent);
+      background: var(--c-bg-1);
+      color: var(--c-accent);
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 12px rgba(0, 255, 136, 0.2);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .new-post-btn:hover {
+      background: var(--c-accent);
+      color: var(--c-bg-1);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0, 255, 136, 0.4);
+    }
+
+    .plus-icon {
+      font-size: 1.25rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .messages-panel {
+      background: var(--card-gradient);
+      border-radius: 16px;
+      border: 1px solid var(--border-color);
+      overflow: hidden;
+      height: calc(100vh - 120px);
     }
 
     .feed-header h1 {
@@ -97,7 +141,7 @@ import { AiCompanionWidgetComponent } from '../../ai-companion/ai-companion-widg
       width: 40px;
       height: 40px;
       border: 4px solid var(--border-color);
-      border-top-color: var(--teal-accent);
+      border-top-color: var(--c-accent);
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }
@@ -123,14 +167,14 @@ import { AiCompanionWidgetComponent } from '../../ai-companion/ai-companion-widg
       padding: 4rem 2rem;
       background: var(--card-gradient);
       border-radius: 16px;
-      border: 1px solid var(--border-color);
+      border: 1px solid var(--c-accent);
       box-shadow: 0 4px 12px var(--shadow);
       transition: all 0.3s ease;
     }
 
     .empty-state:hover {
-      border-color: var(--teal-accent);
-      box-shadow: 0 6px 20px var(--shadow-lg);
+      border-color: var(--c-accent);
+      box-shadow: 0 6px 20px rgba(0, 255, 136, 0.2);
     }
 
     .empty-icon {
@@ -156,20 +200,21 @@ import { AiCompanionWidgetComponent } from '../../ai-companion/ai-companion-widg
     .create-btn {
       padding: 0.85rem 2rem;
       border-radius: 10px;
-      border: none;
-      background: var(--button-gradient);
-      color: var(--light-gray);
+      border: 2px solid var(--c-accent);
+      background: var(--c-bg-1);
+      color: var(--c-accent);
       font-size: 1rem;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.3s ease;
-      box-shadow: 0 4px 12px rgba(118, 171, 174, 0.3);
+      box-shadow: 0 4px 12px rgba(0, 255, 136, 0.2);
     }
 
     .create-btn:hover {
+      background: var(--c-accent);
+      color: var(--c-bg-1);
       transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(118, 171, 174, 0.4);
-      background: var(--button-hover);
+      box-shadow: 0 6px 20px rgba(0, 255, 136, 0.4);
     }
 
     @media (max-width: 768px) {

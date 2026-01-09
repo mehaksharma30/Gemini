@@ -43,6 +43,14 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
   private mediaRecorder?: MediaRecorder;
   private audioChunks: Blob[] = [];
   private recordingStream?: MediaStream;
+  
+  // Silence detection
+  private audioContext?: AudioContext;
+  private analyser?: AnalyserNode;
+  private silenceCheckInterval?: any;
+  private lastSoundTime: number = 0;
+  private readonly SILENCE_THRESHOLD = 0.01; // Audio level threshold
+  private readonly SILENCE_DURATION = 1000; // 1 second of silence
 
   // Audio playback (public for template access)
   currentAudioPlayer: HTMLAudioElement | null = null;
@@ -60,6 +68,7 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
     this.stopPolling();
     this.stopRecording();
     this.cleanupAudioPlayer();
+    this.cleanupSilenceDetection();
   }
 
   /**
@@ -296,6 +305,11 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
 
       this.mediaRecorder.start();
       this.isRecording = true;
+      this.lastSoundTime = Date.now();
+      
+      // Start silence detection
+      this.startSilenceDetection(stream);
+      
       console.log('[WalkieTalkie] ▶️ Recording started with format:', options.mimeType);
     } catch (error: any) {
       console.error('[WalkieTalkie] Error starting recording:', error);
@@ -304,9 +318,76 @@ export class WalkieTalkieComponent implements OnInit, OnDestroy {
   }
 
   /**
+   * Start silence detection to auto-stop after 1 second of silence
+   */
+  private startSilenceDetection(stream: MediaStream): void {
+    try {
+      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const source = this.audioContext.createMediaStreamSource(stream);
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = 256;
+      this.analyser.smoothingTimeConstant = 0.8;
+      source.connect(this.analyser);
+
+      const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+      this.lastSoundTime = Date.now();
+
+      // Check for silence every 100ms
+      this.silenceCheckInterval = setInterval(() => {
+        if (!this.isRecording || !this.analyser) {
+          return;
+        }
+
+        this.analyser.getByteFrequencyData(dataArray);
+        
+        // Calculate average audio level
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i];
+        }
+        const average = sum / dataArray.length;
+        const normalizedLevel = average / 255;
+
+        // If audio level is above threshold, update last sound time
+        if (normalizedLevel > this.SILENCE_THRESHOLD) {
+          this.lastSoundTime = Date.now();
+        }
+
+        // If silence duration exceeded, auto-stop
+        const silenceDuration = Date.now() - this.lastSoundTime;
+        if (silenceDuration >= this.SILENCE_DURATION && this.isRecording) {
+          console.log('[WalkieTalkie] 🔇 Silence detected, auto-stopping recording');
+          this.stopRecording();
+        }
+      }, 100);
+    } catch (error: any) {
+      console.error('[WalkieTalkie] Error setting up silence detection:', error);
+      // Continue recording even if silence detection fails
+    }
+  }
+
+  /**
+   * Cleanup silence detection
+   */
+  private cleanupSilenceDetection(): void {
+    if (this.silenceCheckInterval) {
+      clearInterval(this.silenceCheckInterval);
+      this.silenceCheckInterval = undefined;
+    }
+    if (this.audioContext) {
+      this.audioContext.close().catch(() => {});
+      this.audioContext = undefined;
+    }
+    this.analyser = undefined;
+  }
+
+  /**
    * Stop recording and send
    */
   stopRecording(): void {
+    // Cleanup silence detection first
+    this.cleanupSilenceDetection();
+
     if (this.mediaRecorder && this.isRecording) {
       this.mediaRecorder.stop();
       this.isRecording = false;

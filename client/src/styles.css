@@ -6,47 +6,53 @@
 }
 
 :root {
+  /* Color Palette - Black and Bright Green */
+  --c-bg-1: #0D0D0D;        /* Black */
+  --c-bg-2: #0D0D0D;        /* Black (same) */
+  --c-surface: #0D0D0D;     /* Black */
+  --c-surface-2: #1a1a1a;   /* Slightly lighter black */
+  --c-accent: #00FF88;      /* Bright Green */
+  --c-text: #E6E6E6;        /* Light Text */
+  --c-muted: rgba(230, 230, 230, 0.7); /* Muted Text */
   
-  --dark-charcoal: #222831;
-  --dark-gray: #31363F;
-  --teal-accent: #76ABAE;
-  --light-gray: #EEEEEE;
+  /* Semantic Variables */
+  --bg-primary: var(--c-bg-1);
+  --bg-secondary: var(--c-bg-2);
+  --bg-tertiary: var(--c-surface);
+  --text-primary: var(--c-text);
+  --text-secondary: var(--c-muted);
+  --text-muted: var(--c-accent);
+  --border-color: var(--c-accent);
+  --border-hover: var(--c-accent);
   
+  /* Gradients - Black with green accents */
+  --primary-gradient: linear-gradient(135deg, var(--c-bg-1) 0%, var(--c-surface-2) 100%);
+  --primary-hover: linear-gradient(135deg, var(--c-accent) 0%, var(--c-accent) 100%);
+  --accent-gradient: var(--c-accent);
+  --accent-hover: var(--c-accent);
+  --bg-gradient: var(--c-bg-1);
+  --card-gradient: var(--c-bg-1);
+  --button-gradient: var(--c-bg-1);
+  --button-hover: var(--c-accent);
   
-  --bg-primary: #222831;
-  --bg-secondary: #31363F;
-  --bg-tertiary: #2a2f38;
-  --text-primary: #EEEEEE;
-  --text-secondary: #b8b8b8;
-  --text-muted: #76ABAE;
-  --border-color: #3d4450;
-  --border-hover: #4a5260;
-  
-  
-  --primary-gradient: linear-gradient(135deg, #222831 0%, #31363F 50%, #76ABAE 100%);
-  --primary-hover: linear-gradient(135deg, #2a2f38 0%, #3d4450 50%, #7fb5b8 100%);
-  --accent-gradient: linear-gradient(135deg, #76ABAE 0%, #5a8a8d 100%);
-  --accent-hover: linear-gradient(135deg, #7fb5b8 0%, #6a9a9d 100%);
-  --bg-gradient: linear-gradient(180deg, #222831 0%, #31363F 100%);
-  --card-gradient: linear-gradient(145deg, #31363F 0%, #2a2f38 100%);
-  --button-gradient: linear-gradient(135deg, #76ABAE 0%, #5a8a8d 100%);
-  --button-hover: linear-gradient(135deg, #7fb5b8 0%, #6a9a9d 100%);
-  
-  
-  --error-color: #e57373;
-  --success-color: #76ABAE;
-  --warning-bg: rgba(118, 171, 174, 0.15);
-  --warning-border: #76ABAE;
-  --warning-text: #EEEEEE;
+  /* Status Colors */
+  --error-color: #dc3545;
+  --success-color: var(--c-accent);
+  --warning-bg: rgba(0, 255, 136, 0.15);
+  --warning-border: var(--c-accent);
+  --warning-text: var(--c-text);
   --shadow: rgba(0, 0, 0, 0.3);
   --shadow-lg: rgba(0, 0, 0, 0.5);
+  
+  /* Light Gray for text on green buttons */
+  --light-gray: var(--c-text);
 }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   line-height: 1.6;
-  color: var(--text-primary);
-  background: var(--bg-gradient);
+  color: var(--c-text);
+  background: var(--c-bg-1);
   margin: 0;
   padding: 0;
   min-height: 100vh;
@@ -72,13 +78,17 @@ html {
 button, .btn {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
-  border: none;
+  border: 2px solid var(--c-accent);
+  background: var(--c-bg-1);
+  color: var(--c-accent);
   font-weight: 500;
 }
 
 button:hover:not(:disabled), .btn:hover:not(:disabled) {
+  background: var(--c-accent);
+  color: var(--c-bg-1);
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px var(--shadow);
+  box-shadow: 0 4px 12px rgba(0, 255, 136, 0.3);
 }
 
 button:active:not(:disabled), .btn:active:not(:disabled) {
@@ -95,14 +105,14 @@ input, textarea, select {
 
 input:focus, textarea:focus, select:focus {
   outline: none;
-  border-color: var(--teal-accent);
-  box-shadow: 0 0 0 3px rgba(118, 171, 174, 0.1);
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 3px rgba(0, 255, 136, 0.1);
 }
 
 
 .card {
   background: var(--card-gradient);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--c-accent);
   border-radius: 12px;
   padding: 1.5rem;
   box-shadow: 0 4px 12px var(--shadow);
@@ -111,8 +121,8 @@ input:focus, textarea:focus, select:focus {
 
 .card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px var(--shadow-lg);
-  border-color: var(--teal-accent);
+  box-shadow: 0 6px 20px rgba(0, 255, 136, 0.2);
+  border-color: var(--c-accent);
 }
 
 
@@ -131,7 +141,8 @@ input:focus, textarea:focus, select:focus {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--teal-accent);
+  background: var(--c-accent);
+  box-shadow: 0 0 4px rgba(0, 255, 136, 0.5);
 }
 
 

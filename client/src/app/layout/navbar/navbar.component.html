@@ -1,6 +1,6 @@
 <nav class="navbar">
   <div class="navbar-container">
-    <div class="navbar-brand">
+    <div class="nav-left">
       <a routerLink="/feed" class="brand-link">
         <h2>MindMemos</h2>
       </a>
@@ -12,35 +12,30 @@
       <span></span>
     </button>
 
-    <div class="navbar-menu" [class.active]="isMenuOpen()">
+    <div class="nav-center" [class.active]="isMenuOpen()">
       <ul class="navbar-nav">
         <li><a routerLink="/feed" routerLinkActive="active">Feed</a></li>
-        <li><a routerLink="/posts/create" routerLinkActive="active">New Post</a></li>
-        <li><a routerLink="/messages" routerLinkActive="active">Messages</a></li>
         <li><a routerLink="/search" routerLinkActive="active">Search</a></li>
-        <li><a routerLink="/creative" routerLinkActive="active">Guided Journaling</a></li>
-        <li><a routerLink="/emergency-contacts" routerLinkActive="active">Emergency Contacts</a></li>
+        <li><a routerLink="/creative" routerLinkActive="active">Journaling</a></li>
         <li><a routerLink="/panic" routerLinkActive="active">Panic Mode</a></li>
-        <li><a routerLink="/alerts" routerLinkActive="active">Alerts</a></li>
       </ul>
+    </div>
 
-      <div class="navbar-user" *ngIf="isAuthenticated">
-        <div class="user-info">
-          <span class="username">{{ username }}</span>
-          <span class="tokens">Tokens: {{ tokens }}</span>
+    <div class="nav-right" *ngIf="isAuthenticated">
+      <a [routerLink]="['/users', currentUserId]" class="profile-block">
+        <div class="profile-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
+          </svg>
         </div>
-        <a [routerLink]="['/users', currentUserId]" class="profile-link">Profile</a>
-        <button class="btn-logout" (click)="logout()">Logout</button>
-      </div>
+        <span class="username">{{ username }}</span>
+      </a>
+      <button class="btn-logout" (click)="logout()">Logout</button>
     </div>
   </div>
 </nav>
 
-<div class="disclaimer-banner" *ngIf="isAuthenticated">
-  <p>
-    <strong>Disclaimer:</strong> MindMemos is a peer-support tool and does not replace professional mental health care.
-  </p>
-</div>
 
 
 
