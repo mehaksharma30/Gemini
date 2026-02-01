@@ -8,6 +8,13 @@ server/node_modules/
 .env.local
 server/.env
 
+# Google Cloud service account key (do not commit)
+server/mindmemosg3-52d2039d6bff.json
+
+# Test outputs (TTS)
+test.mp3
+test2.mp3
+
 # Build output
 dist/
 client/dist/

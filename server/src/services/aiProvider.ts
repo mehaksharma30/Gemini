@@ -1,0 +1,111 @@
+/**
+ * Single AI provider module — only place that talks to LLM (Gemini).
+ * Exposes the same function shapes the rest of the app expects.
+ * Env: GEMINI_API_KEY
+ */
+
+import { GoogleGenerativeAI } from '@google/generative-ai';
+
+export type ChatMessage = { role: 'user' | 'assistant'; content: string };
+
+function getGeminiClient(): GoogleGenerativeAI {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY is required. Please configure it in your environment variables.');
+  }
+  return new GoogleGenerativeAI(apiKey);
+}
+
+/**
+ * Generate a chat reply from system prompt + messages (same shape as former getOpenAIText).
+ * Used by ai.controller (AI Talk) and search keyword extraction.
+ */
+export async function generateChatReply(
+  systemPrompt: string,
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>
+): Promise<string> {
+  const genAI = getGeminiClient();
+  const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  const model = genAI.getGenerativeModel({
+    model: modelName,
+    systemInstruction: systemPrompt,
+    generationConfig: {
+      maxOutputTokens: 2000,
+      temperature: 0.7,
+    },
+  });
+
+  if (messages.length === 0) {
+    const result = await model.generateContent('Hello');
+    const text = result.response.text?.()?.trim() ?? '';
+    return text || "I'm here—can you say that again in one line?";
+  }
+
+  // Build history for Gemini: 'user' and 'model' (assistant)
+  const history: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];
+  for (const msg of messages) {
+    const role = msg.role === 'assistant' ? 'model' : 'user';
+    history.push({ role, parts: [{ text: msg.content }] });
+  }
+
+  const lastMsg = messages[messages.length - 1];
+  const lastContent = lastMsg.content;
+
+  if (history.length <= 1) {
+    // Single message: use generateContent
+    const result = await model.generateContent(lastContent);
+    const text = result.response.text?.()?.trim() ?? '';
+    return text || "I'm here—can you say that again in one line?";
+  }
+
+  // Multi-turn: startChat with history (all but last), then send last message
+  const chatHistory = history.slice(0, -1);
+  const chat = model.startChat({ history: chatHistory });
+  const result = await chat.sendMessage(lastContent);
+  const response = result.response;
+  const text = response.text?.()?.trim() ?? '';
+
+  return text || "I'm here—can you say that again in one line?";
+}
+
+/**
+ * Generate reply from a single full prompt string (system + history concatenated).
+ * Used by aiPanic.service (panic/support chat).
+ */
+export async function generateFromPrompt(prompt: string): Promise<string> {
+  const genAI = getGeminiClient();
+  const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  const model = genAI.getGenerativeModel({
+    model: modelName,
+    generationConfig: {
+      maxOutputTokens: 2000,
+      temperature: 0.7,
+    },
+  });
+
+  const result = await model.generateContent(prompt);
+  const response = result.response;
+  const text = response.text?.()?.trim() ?? '';
+
+  return text || "I'm here with you. Take a deep breath. You're not alone. If you need immediate support, please reach out to someone you trust or use the emergency contacts feature in this app.";
+}
+
+/**
+ * Get search keywords from user query (same shape as former getSearchKeywordsFromOpenAI).
+ */
+export async function getSearchKeywords(query: string): Promise<string[]> {
+  const systemPrompt = `Extract 3-8 concise search keywords/phrases from the user query. Return ONLY a comma-separated list. No extra words.`;
+  try {
+    const response = await generateChatReply(systemPrompt, [{ role: 'user', content: query }]);
+    const keywords = response
+      .split(',')
+      .map((kw: string) => kw.trim().toLowerCase())
+      .filter((kw: string) => kw.length > 0 && kw.length < 50);
+    const originalKeywords = query.toLowerCase().split(/\s+/).filter(word => word.length > 2);
+    const allKeywords = [...new Set([...keywords, ...originalKeywords])];
+    return allKeywords.slice(0, 10);
+  } catch (err: any) {
+    console.error('[AI Provider] Search keyword extraction error:', err?.message);
+    return query.toLowerCase().split(/\s+/).filter(word => word.length > 2);
+  }
+}

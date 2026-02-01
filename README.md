@@ -43,8 +43,8 @@
 - **Socket.IO** for real-time chat rooms
 - **Azure Web PubSub** for call signaling
 - **JWT** for authentication
-- **OpenAI API** or **Ollama** for AI responses
-- **Azure Speech Services** for TTS
+- **Google Gemini API** for AI responses
+- **Google Cloud Speech-to-Text** and **Text-to-Speech** for STT/TTS (backend); Azure Speech optional for in-browser voice
 
 ## 📱 Quick Start: Testing on 2 Devices (ngrok)
 
@@ -87,7 +87,7 @@
 - MongoDB (local or cloud instance)
 - Azure Web PubSub Service (for voice calling)
 - Azure Speech Service (for voice chat features)
-- OpenAI API key (optional, can use Ollama instead)
+- Gemini API key and Google Cloud credentials (see LOCAL_TESTING.md)
 - ngrok (installed via npm, or install globally: `npm install -g ngrok`)
 
 ## 🔧 Installation
@@ -123,15 +123,13 @@ PORT=3000
 FRONTEND_URL=http://localhost:4200
 JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
 
-# AI Provider (choose one)
-OPENAI_API_KEY=your-openai-api-key
-OPENAI_MODEL=gpt-4o-mini
-OPENAI_BASE_URL=https://api.openai.com/v1
+# AI (Gemini)
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-1.5-flash
 
-# OR use Ollama (local)
-AI_PROVIDER=ollama
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2:3b
+# Google Cloud (STT/TTS) – path to service account JSON
+GOOGLE_APPLICATION_CREDENTIALS=
+GCP_PROJECT_ID=
 
 # Azure Web PubSub (for voice calling)
 AZURE_WEB_PUBSUB_ENDPOINT=https://your-instance.webpubsub.azure.com
@@ -141,8 +139,8 @@ AZURE_WEB_PUBSUB_HUB_NAME=panic
 # Ngrok (optional, for stable URLs - get token from https://dashboard.ngrok.com/get-started/your-authtoken)
 NGROK_AUTH_TOKEN=your-ngrok-auth-token
 
-# Azure Speech Services (for voice chat)
-AZURE_SPEECH_KEY=your-azure-speech-key
+# Azure Speech (optional – for in-browser voice token / real-time voice chat)
+AZURE_SPEECH_KEY=
 AZURE_SPEECH_REGION=eastus
 
 # Email (optional, for alerts)
@@ -162,6 +160,8 @@ export const environment = {
   azureSpeechRegion: 'eastus',
 };
 ```
+
+For **local testing** of chat, STT, and TTS (including curl examples), see **[LOCAL_TESTING.md](LOCAL_TESTING.md)**.
 
 ## 🚀 Running the Application
 
@@ -320,7 +320,7 @@ MindMemos2.0/
 
 ### General Issues
 - **MongoDB connection error**: Ensure MongoDB is running and `MONGODB_URI` is correct
-- **AI not responding**: Check OpenAI API key or Ollama is running (depending on provider)
+- **AI not responding**: Check GEMINI_API_KEY and that the backend can reach the Gemini API
 - **CORS errors**: Verify `FRONTEND_URL` in backend `.env` matches your frontend URL
 
 ## 📝 API Endpoints

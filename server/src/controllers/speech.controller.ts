@@ -1,25 +1,7 @@
 import { Request, Response } from 'express';
 import https from 'https';
-import fs from 'fs';
 import { promises as fsPromises } from 'fs';
-
-// Ensure fetch is available (Node 18+ has built-in fetch, otherwise use polyfill)
-// TypeScript-safe fetch implementation
-const getFetch = (): typeof fetch => {
-  if (typeof fetch !== 'undefined') {
-    return fetch;
-  }
-  // Fallback for Node < 18 - try to use node-fetch if available
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-    const nodeFetch = require('node-fetch');
-    return nodeFetch.default || nodeFetch;
-  } catch {
-    throw new Error('fetch is not available. Please use Node.js 18+ or install node-fetch: npm install node-fetch');
-  }
-};
-
-const fetchImpl = getFetch();
+import { transcribeAudio as googleTranscribe } from '../services/googleSpeech.service';
 
 /**
  * Get Azure Speech token for frontend
@@ -106,7 +88,7 @@ export const getSpeechToken = async (req: Request, res: Response) => {
 };
 
 /**
- * Transcribe audio file to text using Azure Speech-to-Text
+ * Transcribe audio file to text using Google Cloud Speech-to-Text
  * Endpoint: POST /api/ai/speech/transcribe
  * Input: multipart/form-data with field 'audio' (WAV file, 16kHz mono)
  * Output: { text: string }
@@ -132,111 +114,41 @@ export const transcribeAudio = async (req: Request, res: Response): Promise<void
 
     // Get language from request body (default to en-US)
     const lang = (req.body && req.body.lang) ? req.body.lang : 'en-US';
-    const region = process.env.AZURE_SPEECH_REGION || 'eastus';
-    const key = process.env.AZURE_SPEECH_KEY;
-
-    if (!key) {
-      console.error('[Speech Transcribe] Azure Speech key not configured');
-      res.status(500).json({ error: 'Azure speech env missing' });
+    const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    if (!credentialsPath) {
+      console.error('[Speech Transcribe] GOOGLE_APPLICATION_CREDENTIALS not set');
+      res.status(500).json({ error: 'Speech env missing (GOOGLE_APPLICATION_CREDENTIALS)' });
       return;
     }
 
     console.log('[Speech Transcribe] Processing audio file:', req.file.originalname);
-    console.log('[Speech Transcribe] Language:', lang, 'Region:', region);
+    console.log('[Speech Transcribe] Language:', lang);
 
-    // Read the uploaded audio file (non-blocking)
     const wav = await fsPromises.readFile(req.file.path);
+    const languageCode = lang === 'en-US' ? 'en-US' : lang;
 
-    // Construct Azure Speech-to-Text API URL
-    const url =
-      `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1` +
-      `?language=${encodeURIComponent(lang)}&format=simple`;
+    console.log('[Speech Transcribe] Calling Google Speech-to-Text...');
 
-    console.log('[Speech Transcribe] Calling Azure STT API...');
-
-    // Call Azure Speech-to-Text API
-    const response = await fetchImpl(url, {
-      method: 'POST',
-      headers: {
-        'Ocp-Apim-Subscription-Key': key,
-        'Content-Type': 'audio/wav; codecs=audio/pcm; samplerate=16000',
-        'Accept': 'application/json',
-      },
-      body: wav,
-    });
-
-    // Handle non-OK responses
-    if (!response.ok) {
-      const statusCode = response.status;
-      let errorBody = '';
-      try {
-        errorBody = await response.text();
-      } catch {
-        errorBody = 'Unable to read error response body';
-      }
-      
-      // Truncate error body for logging (max 200 chars)
-      const truncatedBody = errorBody.length > 200 ? errorBody.substring(0, 200) + '...' : errorBody;
-      console.error('[Speech Transcribe] Azure STT API error:', {
-        status: statusCode,
-        body: truncatedBody,
-      });
-      
-      res.status(502).json({
-        error: 'STT failed',
-        statusCode,
-        details: truncatedBody,
-      });
-      return;
-    }
-
-    // Parse response JSON
-    let json: { DisplayText?: string; RecognitionStatus?: string };
+    let text: string;
     try {
-      json = await response.json() as { DisplayText?: string; RecognitionStatus?: string };
-    } catch (parseError: any) {
-      console.error('[Speech Transcribe] Failed to parse Azure response as JSON:', parseError.message);
+      text = await googleTranscribe(Buffer.from(wav), languageCode);
+    } catch (err: any) {
+      console.error('[Speech Transcribe] Google STT error:', err?.message ?? err);
       res.status(502).json({
         error: 'STT failed',
-        statusCode: response.status,
-        details: 'Invalid JSON response from Azure',
+        details: err?.message ?? 'Transcription failed',
       });
       return;
     }
 
-    // Check RecognitionStatus and DisplayText
-    const recognitionStatus = json.RecognitionStatus;
-    const displayText = json.DisplayText || '';
-
-    // If RecognitionStatus indicates no match or DisplayText is empty, check if it's truly no speech
-    if (recognitionStatus === 'NoMatch' || (recognitionStatus !== 'Success' && !displayText.trim())) {
-      // Only return 400 if it's explicitly a no-match (user didn't speak)
-      if (recognitionStatus === 'NoMatch') {
-        console.warn('[Speech Transcribe] No speech detected in audio (NoMatch)');
-        res.status(400).json({ error: 'No speech detected' });
-        return;
-      }
-      // Otherwise, it's a server error
-      console.error('[Speech Transcribe] Azure returned non-success status:', recognitionStatus);
-      res.status(502).json({
-        error: 'STT failed',
-        statusCode: response.status,
-        details: `RecognitionStatus: ${recognitionStatus || 'unknown'}`,
-      });
-      return;
-    }
-
-    // Extract text from response
-    const text = displayText.trim();
-
-    if (!text) {
-      console.warn('[Speech Transcribe] No speech detected in audio (empty DisplayText)');
+    if (!text || !text.trim()) {
+      console.warn('[Speech Transcribe] No speech detected in audio');
       res.status(400).json({ error: 'No speech detected' });
       return;
     }
 
     console.log('[Speech Transcribe] Transcription successful:', text.substring(0, 50) + '...');
-    res.json({ text });
+    res.json({ text: text.trim() });
   } catch (error: any) {
     console.error('[Speech Transcribe] Error:', error);
     

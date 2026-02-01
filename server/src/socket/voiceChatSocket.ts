@@ -118,21 +118,15 @@ export function setupVoiceChatSocket(io: Server): void {
             session.conversationHistory.push({ role: 'assistant', content: aiResponse });
             socket.emit('voice:ai-text', { text: aiResponse });
 
-            // Convert AI response to speech using Azure TTS
+            // Convert AI response to speech using Google TTS
             try {
-              const { textToSpeech } = require('../services/azureSpeech.service');
-              const audioData = await textToSpeech(aiResponse);
-              
-              // Convert ArrayBuffer to Buffer and send as base64
-              const audioBuffer = Buffer.from(audioData);
+              const { synthesizeToMp3 } = require('../services/googleTts.service');
+              const audioBuffer = await synthesizeToMp3(aiResponse);
               const base64Audio = audioBuffer.toString('base64');
-              
-              // Send complete audio (WAV format from Azure)
               socket.emit('voice:audio-chunk', {
                 audio: base64Audio,
-                isFinal: true, // Complete audio
+                isFinal: true,
               });
-              
               console.log('[Voice Chat] TTS audio sent, size:', audioBuffer.length, 'bytes');
             } catch (ttsError: any) {
               console.error('[Voice Chat] TTS error:', ttsError);

@@ -4,6 +4,9 @@ node_modules/
 # Environment variables
 .env
 
+# Google Cloud service account key (do not commit)
+mindmemosg3-52d2039d6bff.json
+
 # Build output
 dist/
 

@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { synthesizeToMp3 } from '../services/azureTts.service';
+import { synthesizeToMp3 } from '../services/googleTts.service';
 import { body, validationResult } from 'express-validator';
 
 /**

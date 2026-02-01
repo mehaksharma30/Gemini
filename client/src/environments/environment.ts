@@ -7,12 +7,12 @@ const getWebSocketUrl = (): string => {
     return (process as any).env['NG_APP_WS_URL'];
   }
   // Fallback to default local development URL
-  return 'ws://localhost:3000/voice-gateway';
+  return 'ws://localhost:3002/voice-gateway';
 };
 
 export const environment = {
   production: false,
-  apiUrl: 'http://localhost:3000/api',
+  apiUrl: 'http://localhost:3002/api',
   ngrokUrl: '', // Will be set by ngrok script if running
   // Voice Gateway WebSocket URL (local development)
   // Can be overridden via NG_APP_WS_URL environment variable

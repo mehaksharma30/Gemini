@@ -36,7 +36,9 @@
     "mongoose": "^8.0.3",
     "multer": "^2.0.2",
     "nodemailer": "^7.0.12",
-    "openai": "^6.15.0",
+    "@google/generative-ai": "^0.21.0",
+    "@google-cloud/speech": "^7.0.0",
+    "@google-cloud/text-to-speech": "^5.0.0",
     "socket.io": "^4.7.2",
     "ws": "^8.18.3"
   },

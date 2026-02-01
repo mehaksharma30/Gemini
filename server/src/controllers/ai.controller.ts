@@ -104,10 +104,10 @@ export const aiChat = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'Question is required' });
     }
 
-    // CRITICAL: Check for OpenAI API key - throw clear error if missing
-    const apiKey = process.env.OPENAI_API_KEY;
+    // CRITICAL: Check for Gemini API key - throw clear error if missing
+    const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      const error = new Error('OPENAI_API_KEY is required for AI Talk. Please configure it in your environment variables.');
+      const error = new Error('GEMINI_API_KEY is required for AI Talk. Please configure it in your environment variables.');
       console.error('[AI Chat] ERROR:', error.message);
       return res.status(500).json({
         success: false,
@@ -162,7 +162,7 @@ Always end your responses with a gentle reminder about seeking professional help
     console.error('AI chat error:', error);
 
     let message = 'AI service is currently unavailable';
-    if (error.message.includes('OpenAI API key not configured') || error.message.includes('OPENAI_API_KEY')) {
+    if (error.message.includes('Gemini API key not configured') || error.message.includes('GEMINI_API_KEY')) {
       message = 'AI service is not configured. Please contact support.';
     }
 

@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import { generateFromPrompt } from './aiProvider';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -2180,192 +2180,9 @@ function cleanRepetitivePhrases(text: string): string {
 }
 
 /**
- * Safely extract text from OpenAI Responses API response.
- * PRIMARY: Use response.output_text directly if present.
- * FALLBACK: Extract from response.output[?].content[?].text.
- * Always returns a string (never throws).
- */
-function extractTextFromResponse(response: any): string {
-  try {
-    // PRIMARY STRATEGY: Check output_text first (direct string)
-    if (response.output_text !== undefined && response.output_text !== null) {
-      if (typeof response.output_text === 'string') {
-        const trimmed = response.output_text.trim();
-        if (trimmed) {
-          console.log('[AI] Extracted text from output_text:', trimmed.substring(0, 100) + '...');
-          return trimmed;
-        }
-      }
-    }
-    
-    // FALLBACK STRATEGY: Extract from output array
-    if (Array.isArray(response.output)) {
-      for (const item of response.output) {
-        if (item && item.content) {
-          // If content is an array
-          if (Array.isArray(item.content)) {
-            for (const contentItem of item.content) {
-              if (contentItem && typeof contentItem.text === 'string') {
-                const trimmed = contentItem.text.trim();
-                if (trimmed) {
-                  console.log('[AI] Extracted text from output[].content[].text:', trimmed.substring(0, 100) + '...');
-                  return trimmed;
-                }
-              }
-            }
-          }
-          // If content is an object
-          else if (item.content && typeof item.content.text === 'string') {
-            const trimmed = item.content.text.trim();
-            if (trimmed) {
-              console.log('[AI] Extracted text from output[].content.text:', trimmed.substring(0, 100) + '...');
-              return trimmed;
-            }
-          }
-        }
-      }
-    }
-    
-    // Last fallback: choices format (legacy)
-    if (response.choices?.[0]?.message?.content && typeof response.choices[0].message.content === 'string') {
-      const trimmed = response.choices[0].message.content.trim();
-      if (trimmed) {
-        console.log('[AI] Extracted text from choices[0].message.content');
-        return trimmed;
-      }
-    }
-    
-    console.warn('[AI] No text found in response structure');
-    return '';
-  } catch (err: any) {
-    console.error('[AI] Error extracting text from response:', err);
-    console.error('[AI] Stack:', err?.stack);
-    return '';
-  }
-}
-
-/**
- * Get AI response using OpenAI Responses API with retry logic for incomplete responses.
- * Throws error if API call fails after retries (caller should handle).
- */
-export async function getAIResponse(prompt: string, retryCount: number = 0): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    const error = new Error('OpenAI API key not configured');
-    console.error('[AI] ERROR:', error.message);
-    console.error('[AI] Stack:', error.stack);
-    throw error;
-  }
-
-  const model = process.env.OPENAI_MODEL || 'gpt-5-mini';
-  const baseURL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-
-  // Determine max_output_tokens: set to 2000 for gpt-5-mini (both initial and retry)
-  // This reduces incomplete outputs while keeping responses complete
-  const isRetry = retryCount > 0;
-  const maxOutputTokens = 2000; // Fixed at 2000 for all cases
-  
-  // Build request parameters
-  const requestParams: any = {
-    model,
-    input: prompt,
-    max_output_tokens: maxOutputTokens,
-  };
-
-  // Add reasoning.effort="low" for gpt-5-mini to ensure text output
-  if (model.includes('gpt-5')) {
-    requestParams.reasoning = { effort: 'low' };
-  }
-
-  console.log('[AI] Request started', { 
-    model, 
-    max_output_tokens: maxOutputTokens,
-    retry: isRetry,
-    baseURL: baseURL.replace(/\/[^\/]*$/, '/***'),
-    provider: 'OpenAI' // Confirm OpenAI provider (no Ollama fallback)
-  });
-
-  const openai = new OpenAI({
-    apiKey,
-    baseURL,
-  });
-
-  try {
-    // Call OpenAI Responses API with timeout
-    const completion = await Promise.race([
-      openai.responses.create(requestParams),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Request timeout after 30 seconds')), 30000)
-      ),
-    ]);
-
-    // CRITICAL: Safe logging - don't log full JSON (PII risk, massive logs)
-    // Log only status/incomplete_reason/model + first ~120 chars of extracted text
-    const response = completion as any;
-    const status = response.status || 'unknown';
-    const incompleteReason = response.incomplete_details?.reason || 'none';
-    const model = response.model || 'unknown';
-    const extractedText = extractTextFromResponse(completion);
-    const textPreview = extractedText ? extractedText.substring(0, 120) : 'no text extracted';
-    
-    console.log('[AI] Response status:', status, 'incomplete_reason:', incompleteReason, 'model:', model);
-    if (extractedText) {
-      console.log('[AI] Extracted text preview (first 120 chars):', textPreview + (extractedText.length > 120 ? '...' : ''));
-    }
-
-    // Extract text from response (PRIMARY: output_text, FALLBACK: output[].content[].text)
-    let text = extractTextFromResponse(completion);
-    
-    // Finish sentence safeguard: if text ends with incomplete phrase, append punctuation
-    if (text && text.length > 40) {
-      const trimmed = text.trim();
-      const incompleteEndings = ['using', 'with', 'and', ',', '—', '...', '…'];
-      const endsWithIncomplete = incompleteEndings.some(ending => 
-        trimmed.toLowerCase().endsWith(ending.toLowerCase())
-      );
-      const endsWithPunctuation = /[.!?]$/.test(trimmed);
-      
-      if (endsWithIncomplete && !endsWithPunctuation) {
-        // Append period if clearly incomplete
-        text = trimmed + '.';
-        console.log('[AI] Applied finish sentence safeguard - appended punctuation');
-      }
-    }
-    
-    // If we have text, return it immediately (even if response is incomplete)
-    if (text) {
-      const isIncomplete = response.status === 'incomplete';
-      if (isIncomplete) {
-        console.log('[AI] Response incomplete but returning extracted text');
-      }
-      return text;
-    }
-    
-    // Check if response is incomplete due to max_output_tokens (for retry logic)
-    const isIncomplete = response.status === 'incomplete';
-    const isMaxTokensIssue = incompleteReason === 'max_output_tokens' || incompleteReason === 'max_tokens';
-    
-    // If incomplete due to max_output_tokens and no text extracted, retry once with higher limit
-    if (isIncomplete && isMaxTokensIssue && retryCount === 0) {
-      console.log('[AI] Response incomplete due to max_output_tokens, retrying with higher limit...');
-      return await getAIResponse(prompt, 1);
-    }
-    
-    // If still no text after retry, return fallback message (don't throw - always return string)
-    console.warn('[AI] No text extracted, returning fallback message');
-    return FALLBACK_MESSAGE;
-  } catch (error: any) {
-    console.error('[AI] ERROR:', error.message || 'Unknown error');
-    console.error('[AI] Stack:', error.stack);
-    throw error;
-  }
-}
-
-
-/**
  * Get AI panic response with conversation history and user context.
- * ALWAYS uses OpenAI (gpt-5-mini) - never falls back to Ollama.
- * Throws error if API call fails or OPENAI_API_KEY is missing (caller should handle).
+ * Uses Gemini (aiProvider.generateFromPrompt).
+ * Throws error if API call fails or GEMINI_API_KEY is missing (caller should handle).
  */
 export async function getAIPanicResponse(
   message: string,
@@ -2375,10 +2192,10 @@ export async function getAIPanicResponse(
   userId?: string,
   detectedLang?: 'en' // Optional: detected language from STT (always 'en' - English only)
 ): Promise<string> {
-  // CRITICAL: Check for OpenAI API key - throw clear error if missing
-  const apiKey = process.env.OPENAI_API_KEY;
+  // CRITICAL: Check for Gemini API key - throw clear error if missing
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    const error = new Error('OPENAI_API_KEY is required for panic/support chat. Please configure it in your environment variables.');
+    const error = new Error('GEMINI_API_KEY is required for panic/support chat. Please configure it in your environment variables.');
     console.error('[AI] ERROR:', error.message);
     throw error;
   }
@@ -2526,11 +2343,11 @@ export async function getAIPanicResponse(
   }
 
   // Log conversation state
-  console.log('[AI] OpenAI request - conversation history length:', history.length);
-  console.log('[AI] OpenAI request - isFirstUserMessage:', isFirstUserMessage);
-  console.log('[AI] OpenAI request - input text length:', inputText.length, 'chars');
+  console.log('[AI] Request - conversation history length:', history.length);
+  console.log('[AI] Request - isFirstUserMessage:', isFirstUserMessage);
+  console.log('[AI] Request - input text length:', inputText.length, 'chars');
 
-  const response = await getAIResponse(inputText);
+  const response = await generateFromPrompt(inputText);
   
   // FEED/POST MODE: Skip post-processing for feed questions (return raw response)
   if (isFeedQuestion(message)) {
