@@ -33,8 +33,7 @@ export function initializeVoiceGateway(httpServer: HttpServer): void {
       const allowedOrigins = process.env.FRONTEND_ORIGINS 
         ? process.env.FRONTEND_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
         : [
-            'http://localhost:4200',
-            'https://purple-moss-01574bd1e.4.azurestaticapps.net'
+            'http://localhost:4200'
           ];
       
       // Add legacy FRONTEND_URL if present
