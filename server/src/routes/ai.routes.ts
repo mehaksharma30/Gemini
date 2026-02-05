@@ -5,6 +5,7 @@ import { aiChat } from '../controllers/ai.controller';
 import { panicChat } from '../controllers/aiPanic.controller';
 import { transcribeAudio } from '../controllers/speech.controller';
 import { textToSpeech, ttsValidation } from '../controllers/tts.controller';
+import { getSpeechToken } from '../controllers/voice.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -19,6 +20,7 @@ const upload = multer({
   },
 });
 
+router.get('/speech/token', getSpeechToken);
 router.post('/chat', aiChat);
 router.post('/panic-chat', panicChat);
 router.post('/speech/transcribe', upload.single('audio'), transcribeAudio);

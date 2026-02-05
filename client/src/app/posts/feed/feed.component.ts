@@ -7,11 +7,12 @@ import { AuthService } from '../../core/services/auth.service';
 import { PostCardComponent } from '../post-card/post-card.component';
 import { AiCompanionWidgetComponent } from '../../ai-companion/ai-companion-widget.component';
 import { MessagesWidgetComponent } from '../../messages/messages-widget.component';
+import { ModalComponent } from '../../core/components/modal/modal.component';
 
 @Component({
   selector: 'app-feed',
   standalone: true,
-  imports: [CommonModule, PostCardComponent, AiCompanionWidgetComponent, MessagesWidgetComponent],
+  imports: [CommonModule, PostCardComponent, AiCompanionWidgetComponent, MessagesWidgetComponent, ModalComponent],
   template: `
     <div class="feed-container">
       <div class="feed-content">
@@ -37,7 +38,7 @@ import { MessagesWidgetComponent } from '../../messages/messages-widget.componen
             [post]="post"
             [currentUserId]="currentUserId"
             (edit)="onEdit(post)"
-            (delete)="onDelete(post)"
+            (delete)="openDeleteConfirm(post)"
           ></app-post-card>
         </div>
 
@@ -53,6 +54,19 @@ import { MessagesWidgetComponent } from '../../messages/messages-widget.componen
 
       <app-ai-companion-widget></app-ai-companion-widget>
       <app-messages-widget></app-messages-widget>
+
+      <app-modal
+        [isOpen]="!!postToDelete"
+        title="Delete post"
+        [showFooter]="true"
+        (close)="closeDeleteConfirm()"
+      >
+        <p class="confirm-message">Delete this post permanently?</p>
+        <div footer>
+          <button type="button" class="btn-cancel" (click)="closeDeleteConfirm()">Cancel</button>
+          <button type="button" class="btn-delete" (click)="confirmDelete()">Delete</button>
+        </div>
+      </app-modal>
     </div>
   `,
   styles: [`
@@ -217,6 +231,34 @@ import { MessagesWidgetComponent } from '../../messages/messages-widget.componen
       box-shadow: 0 6px 20px rgba(0, 255, 136, 0.4);
     }
 
+    .confirm-message {
+      margin: 0;
+      color: var(--text-primary);
+    }
+
+    .btn-cancel, .btn-delete {
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-cancel {
+      background: var(--c-bg-1);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
+
+    .btn-delete {
+      background: #dc3545;
+      color: #fff;
+    }
+
+    .btn-delete:hover {
+      background: #c82333;
+    }
+
     @media (max-width: 768px) {
       .feed-container {
         padding: 1rem 0.5rem;
@@ -267,15 +309,24 @@ export class FeedComponent implements OnInit {
     });
   }
 
+  postToDelete: Post | null = null;
+
   onEdit(post: Post): void {
     this.router.navigate(['/posts', post._id, 'edit']);
   }
 
-  onDelete(post: Post): void {
-    if (!confirm('Delete this post permanently?')) {
-      return;
-    }
+  openDeleteConfirm(post: Post): void {
+    this.postToDelete = post;
+  }
 
+  closeDeleteConfirm(): void {
+    this.postToDelete = null;
+  }
+
+  confirmDelete(): void {
+    if (!this.postToDelete) return;
+    const post = this.postToDelete;
+    this.postToDelete = null;
     this.postService.deletePost(post._id).subscribe({
       next: () => {
         this.posts = this.posts.filter((p) => p._id !== post._id);

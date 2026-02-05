@@ -1,15 +1,29 @@
 import { Request, Response } from 'express';
+import path from 'path';
 import { promises as fsPromises } from 'fs';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { transcribeAudio as googleTranscribe } from '../services/googleSpeech.service';
+
+const execFileAsync = promisify(execFile);
+
+let ffmpegPath: string;
+try {
+  const ffmpegStatic = require('ffmpeg-static');
+  ffmpegPath = typeof ffmpegStatic === 'string' ? ffmpegStatic : (ffmpegStatic as any).default || 'ffmpeg';
+} catch {
+  ffmpegPath = 'ffmpeg';
+}
 
 /**
  * Transcribe audio file to text using Google Cloud Speech-to-Text
  * Endpoint: POST /api/ai/speech/transcribe
- * Input: multipart/form-data with field 'audio' (WAV file, 16kHz mono)
+ * Input: multipart/form-data with field 'audio' (WAV 16kHz mono, or WebM/Opus - converted automatically)
  * Output: { text: string }
  */
 export const transcribeAudio = async (req: Request, res: Response): Promise<void> => {
   const tempFilePath = req.file?.path;
+  let wavPath: string | null = null;
   
   try {
     console.log('[Speech Transcribe] Request received');
@@ -20,14 +34,12 @@ export const transcribeAudio = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    // Check if audio file was uploaded
     if (!req.file) {
       console.warn('[Speech Transcribe] No audio file provided');
       res.status(400).json({ error: 'Missing audio file' });
       return;
     }
 
-    // Get language from request body (default to en-US)
     const lang = (req.body && req.body.lang) ? req.body.lang : 'en-US';
     const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
     if (!credentialsPath) {
@@ -36,11 +48,31 @@ export const transcribeAudio = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    console.log('[Speech Transcribe] Processing audio file:', req.file.originalname);
-    console.log('[Speech Transcribe] Language:', lang);
-
-    const wav = await fsPromises.readFile(req.file.path);
+    console.log('[Speech Transcribe] Processing audio file:', req.file.originalname, 'mimetype:', req.file.mimetype);
     const languageCode = lang === 'en-US' ? 'en-US' : lang;
+
+    const isWebm = (req.file.mimetype || '').includes('webm') || (req.file.originalname || '').toLowerCase().endsWith('.webm');
+    let wav: Buffer;
+
+    if (isWebm) {
+      // Convert WebM/Opus to raw 16kHz mono LINEAR16 for Google Speech-to-Text
+      wavPath = path.join(path.dirname(req.file.path), `transcribe_${Date.now()}.raw`);
+      await execFileAsync(ffmpegPath, [
+        '-i', req.file.path,
+        '-f', 's16le',
+        '-ar', '16000',
+        '-ac', '1',
+        '-y',
+        wavPath,
+      ]);
+      wav = await fsPromises.readFile(wavPath);
+    } else {
+      wav = await fsPromises.readFile(req.file.path);
+      // If upload is WAV, strip 44-byte header so Google gets raw LINEAR16
+      if (wav.length > 44 && wav.toString('ascii', 0, 4) === 'RIFF') {
+        wav = wav.subarray(44);
+      }
+    }
 
     console.log('[Speech Transcribe] Calling Google Speech-to-Text...');
 
@@ -74,14 +106,18 @@ export const transcribeAudio = async (req: Request, res: Response): Promise<void
       });
     }
   } finally {
-    // CRITICAL: Always cleanup temp file (success or error)
     if (tempFilePath) {
       try {
         await fsPromises.unlink(tempFilePath);
-        console.log('[Speech Transcribe] Temp file cleaned up');
       } catch (unlinkError: any) {
-        // Log but don't throw - cleanup failure shouldn't break the response
         console.warn('[Speech Transcribe] Failed to cleanup temp file:', unlinkError.message);
+      }
+    }
+    if (wavPath) {
+      try {
+        await fsPromises.unlink(wavPath);
+      } catch (e: any) {
+        console.warn('[Speech Transcribe] Failed to cleanup conversion file:', e?.message);
       }
     }
   }

@@ -1,11 +1,13 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import connectDB from './config/database';
 import { initializeAIProvider } from './config/aiProvider';
+import { checkGeminiStatus } from './services/aiProvider';
 import authRoutes from './routes/auth.routes';
 import postRoutes from './routes/post.routes';
 import uploadRoutes from './routes/upload.routes';
@@ -34,6 +36,7 @@ const httpServer = createServer(app);
 // Allowed origins for CORS (both local dev and production)
 const allowedOrigins: string[] = [
   'http://localhost:4200', // Always allow localhost for development
+  'http://localhost:4201', // Alternate dev port when 4200 is in use
 ];
 
 // Parse FRONTEND_ORIGINS environment variable (comma-separated list)
@@ -59,13 +62,16 @@ const corsOptions = {
     if (!origin) {
       return callback(null, true);
     }
-    
     if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.warn(`CORS blocked origin: ${origin}. Allowed origins: ${allowedOrigins.join(', ')}`);
-      callback(new Error('Not allowed by CORS'));
+      return callback(null, true);
     }
+    // In production (e.g. single-VM GCE deploy), allow same-origin and other origins
+    // so the app works when opened at http://<VM_IP>:3000 without setting FRONTEND_URL
+    if (process.env.NODE_ENV === 'production') {
+      return callback(null, true);
+    }
+    console.warn(`CORS blocked origin: ${origin}. Allowed origins: ${allowedOrigins.join(', ')}`);
+    callback(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -76,10 +82,10 @@ const corsOptions = {
 // Apply CORS middleware
 app.use(cors(corsOptions));
 
-// Socket.IO CORS configuration
+// Socket.IO CORS configuration (in production allow any origin for single-VM deploy)
 const io = new Server(httpServer, {
   cors: {
-    origin: allowedOrigins,
+    origin: process.env.NODE_ENV === 'production' ? true : allowedOrigins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
@@ -106,6 +112,17 @@ const io = new Server(httpServer, {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Request logging for debugging (method, path, status, origin)
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    if (req.path.startsWith('/api') || req.path === '/api/health') {
+      console.log(`[REQ] ${req.method} ${req.path} ${res.statusCode} ${Date.now() - start}ms origin=${req.get('origin') ?? '-'}`);
+    }
+  });
+  next();
+});
+
 connectDB();
 
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
@@ -116,6 +133,24 @@ app.use('/api/uploads', uploadRoutes);
 app.use('/api/comments', commentRoutes);
 app.use('/api/dm', dmRoutes);
 app.use('/api/users', userRoutes);
+// Public: Gemini status check (no auth) - separate path so it never hits /api/ai auth
+app.get('/api/gemini-status', async (_req, res) => {
+  try {
+    const status = await checkGeminiStatus();
+    if (status.ok) {
+      return res.json({ ok: true, message: 'Gemini is connected and working', model: status.model });
+    }
+    return res.status(503).json({
+      ok: false,
+      message: 'Gemini is not available',
+      error: status.error,
+      model: status.model,
+    });
+  } catch (err: unknown) {
+    const e = err as Error;
+    return res.status(500).json({ ok: false, message: 'Status check failed', error: e?.message });
+  }
+});
 app.use('/api/ai', aiRoutes);
 app.use('/api/chat/ratings', chatRatingRoutes);
 app.use('/api/search', searchRoutes);
@@ -143,6 +178,32 @@ app.get('/voice-gateway/health', (req, res) => {
     supportedPaths: ['/voice-gateway', '/vo_<session>'],
     port: PORT
   });
+});
+
+// In production, serve Angular app from public-app if present (single GCE VM)
+const publicAppPath = path.resolve(path.join(__dirname, '..', 'public-app'));
+const indexHtmlPath = path.join(publicAppPath, 'index.html');
+if (process.env.NODE_ENV === 'production') {
+  if (fs.existsSync(publicAppPath) && fs.existsSync(indexHtmlPath)) {
+    app.use(express.static(publicAppPath, { index: false })); // don't serve index for /
+    app.get('*', (req, res, next) => {
+      res.sendFile(indexHtmlPath, (err) => {
+        if (err) {
+          next(err);
+        }
+      });
+    });
+    console.log('✅ Serving frontend from public-app at', publicAppPath);
+  }
+}
+
+// Error handler for static/catch-all (e.g. sendFile failures)
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const e = err as NodeJS.ErrnoException;
+  console.error('[Static/Frontend] Error serving file:', e?.message || err);
+  if (!res.headersSent) {
+    res.status(500).json({ error: 'Internal server error', message: process.env.NODE_ENV === 'development' ? e?.message : undefined });
+  }
 });
 
 setupDMSocket(io);

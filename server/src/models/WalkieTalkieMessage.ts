@@ -22,19 +22,19 @@ const walkieTalkieMessageSchema = new Schema<IWalkieTalkieMessage>(
     threadId: {
       type: String,
       required: true,
-      index: true,
+      // index via compound below with createdAt
     },
     fromUserId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
-      index: true,
+      // index via compound below
     },
     toUserId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
-      index: true,
+      // index via compound below
     },
     audioUrl: {
       type: String,
@@ -51,7 +51,7 @@ const walkieTalkieMessageSchema = new Schema<IWalkieTalkieMessage>(
     createdAt: {
       type: Date,
       default: Date.now,
-      index: true,
+      // index via compound below with threadId
     },
   },
   {
@@ -59,14 +59,12 @@ const walkieTalkieMessageSchema = new Schema<IWalkieTalkieMessage>(
   }
 );
 
-// Index for efficient thread queries
+// Compound index for thread + timestamp (single definition; avoid duplicate with index:true on fields)
 walkieTalkieMessageSchema.index({ threadId: 1, createdAt: 1 });
 // Index for user queries (messages sent to a user)
 walkieTalkieMessageSchema.index({ toUserId: 1, createdAt: 1 });
 // Index for user queries (messages sent by a user)
 walkieTalkieMessageSchema.index({ fromUserId: 1, createdAt: 1 });
-// Compound index for thread + timestamp queries
-walkieTalkieMessageSchema.index({ threadId: 1, createdAt: 1 });
 
 const WalkieTalkieMessage = mongoose.model<IWalkieTalkieMessage>(
   'WalkieTalkieMessage',

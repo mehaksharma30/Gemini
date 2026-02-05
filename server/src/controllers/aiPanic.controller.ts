@@ -26,6 +26,15 @@ export const panicChat = async (req: Request, res: Response) => {
       });
     }
 
+    if (!process.env.GEMINI_API_KEY) {
+      console.error(`[AI] [${requestId}] Gemini not configured - GEMINI_API_KEY is missing`);
+      return res.status(503).json({
+        error: 'Gemini AI is not connected',
+        code: 'GEMINI_NOT_CONFIGURED',
+        details: 'Server is missing GEMINI_API_KEY. Please configure it in the server environment.',
+      });
+    }
+
     const userId = req.user.userId;
     const { message, history, conversationId, detectedLang } = req.body;
     
@@ -199,16 +208,34 @@ export const panicChat = async (req: Request, res: Response) => {
 
     return res.status(200).json(response);
   } catch (error: any) {
+    const msg = error?.message || 'Unknown error';
     console.error(`[AI] [${requestId}] ERROR in panicChat controller:`, {
-      message: error.message || 'Unknown error',
+      message: msg,
       stack: error.stack,
       name: error.name,
       code: error.code,
     });
-    
-    // Return 500 with error details
+
+    // Detect Gemini quota / rate-limit / availability errors → return 503 so UI can show clear message
+    const isGeminiQuota =
+      msg.includes('429') ||
+      msg.includes('Too Many Requests') ||
+      msg.includes('quota') ||
+      msg.includes('rate-limit') ||
+      msg.includes('rate limit') ||
+      msg.includes('RESOURCE_EXHAUSTED') ||
+      msg.includes('quota exceeded');
+    if (isGeminiQuota) {
+      return res.status(503).json({
+        error: 'Gemini AI quota exceeded or temporarily unavailable.',
+        code: 'GEMINI_QUOTA_EXCEEDED',
+        details: 'Please try again in a few minutes or check your API quota.',
+      });
+    }
+
+    // Return 500 with error details for other errors
     return res.status(500).json({
-      error: error.message || 'Failed to get AI response',
+      error: msg.length > 200 ? msg.substring(0, 200) + '...' : msg,
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined,
     });
   }

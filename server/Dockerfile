@@ -1,38 +1,30 @@
 # Dockerfile for MindMemos Server on Google Compute Engine
-FROM node:20-slim
-
-# Set working directory
+# Stage 1: build
+FROM node:20-slim AS builder
 WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build
 
-# Install system dependencies for Google Cloud SDK and audio processing
+# Stage 2: production
+FROM node:20-slim
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
-
-# Copy package files
 COPY package*.json ./
-
-# Install Node.js dependencies
 RUN npm ci --only=production
-
-# Copy TypeScript source files
-COPY tsconfig.json ./
-COPY src ./src
-
-# Build TypeScript
-RUN npm run build
-
-# Create directories for uploads and temp files
+COPY --from=builder /app/dist ./dist
+# Optional: copy Angular build to server/public-app for single-VM deploy (see GCE_DEPLOYMENT.md)
+COPY public-app ./public-app
 RUN mkdir -p uploads tmp
-
-# Expose port
 EXPOSE 3000
-
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
-
-# Start the server
 CMD ["npm", "start"]
 

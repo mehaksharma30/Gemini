@@ -62,6 +62,13 @@ import { environment } from '../../environments/environment';
               <h3>AI Support Chat</h3>
               <div class="chat-header-actions">
                 <button
+                  class="gemini-status-btn"
+                  (click)="checkGeminiStatus()"
+                  title="Check if Gemini AI is connected"
+                >
+                  {{ geminiAvailable === null ? '⟳' : (geminiAvailable ? '✓ Connected' : '⚠ Unavailable') }}
+                </button>
+                <button
                   class="voice-toggle-btn"
                   [class.active]="isVoiceMode"
                   (click)="toggleVoiceMode()"
@@ -82,6 +89,9 @@ import { environment } from '../../environments/environment';
                 </button>
                 <button class="close-chat-btn" (click)="closeAIChat()">×</button>
               </div>
+            </div>
+            <div class="gemini-unavailable-banner" *ngIf="geminiAvailable === false">
+              AI support is temporarily unavailable (Gemini not connected or quota exceeded). Please try again in a few minutes.
             </div>
             <div class="chat-messages" #chatMessages>
               <div
@@ -1403,6 +1413,7 @@ export class PanicComponent implements OnInit, OnDestroy {
   conversationId: string | null = null;
   isListening = false; // For STT listening state
   isSpeaking = false; // For TTS playback state
+  geminiAvailable: boolean | null = null; // null = not checked, true/false after GET /api/gemini-status
   private currentAudio: HTMLAudioElement | null = null; // Track current audio playback
 
   ngOnInit(): void {
@@ -1457,10 +1468,29 @@ export class PanicComponent implements OnInit, OnDestroy {
     this.chatHistory = [];
     this.chatInput = '';
     this.conversationId = null; // Reset conversationId for new conversation
+    this.geminiAvailable = null; // Reset so we re-check when panel opens
     this.isTriggering = false;
 
-    // REMOVED: Auto-send "Start" message - assistant must wait for user to type
-    // Chat panel opens but no API call is made until user sends a message
+    // Check if Gemini is connected so user sees status immediately
+    this.checkGeminiStatus();
+  }
+
+  /** Call GET /api/gemini-status (no auth) to show whether Gemini is connected. */
+  checkGeminiStatus(): void {
+    this.http.get<{ ok: boolean; error?: string; model?: string }>(`${environment.apiUrl}/gemini-status`).subscribe({
+      next: (res) => {
+        this.geminiAvailable = res.ok;
+        this.cdr.markForCheck();
+        if (!res.ok) {
+          console.warn('[Panic] Gemini status:', res.error || 'unavailable');
+        }
+      },
+      error: () => {
+        this.geminiAvailable = false;
+        this.cdr.markForCheck();
+        console.warn('[Panic] Gemini status check failed (network or server error)');
+      },
+    });
   }
 
   requestInitialAIMessage(): void {
@@ -1520,8 +1550,26 @@ export class PanicComponent implements OnInit, OnDestroy {
         // Check for auth errors
         if (err.status === 401 || err.status === 403) {
           this.toastService.show('Session expired. Please log in again.', 'error');
+        } else if (err.status === 503) {
+          if (err.error?.code === 'GEMINI_QUOTA_EXCEEDED') {
+            this.toastService.show('AI quota exceeded. Please try again in a few minutes.', 'error');
+            this.geminiAvailable = false;
+            this.cdr.markForCheck();
+          } else if (err.error?.code === 'GEMINI_NOT_CONFIGURED') {
+            this.toastService.show('Gemini AI is not connected. Please check server configuration (GEMINI_API_KEY).', 'error');
+          } else {
+            this.toastService.show('Gemini AI is temporarily unavailable. Please try again in a few minutes.', 'error');
+            this.geminiAvailable = false;
+            this.cdr.markForCheck();
+          }
+        } else if (err.status === 500) {
+          const backendMsg = err.error?.error || err.error?.details || '';
+          this.toastService.show(
+            backendMsg ? `AI error: ${backendMsg}` : 'AI support is temporarily unavailable. Please try again.',
+            'error'
+          );
         } else {
-          const errorMsg = process.env['NODE_ENV'] === 'development'
+          const errorMsg = !environment.production
             ? `Connection failed: ${err.status} ${err.statusText} - ${err.error?.error || err.message}`
             : 'Failed to connect to AI. Please try again.';
           this.toastService.show(errorMsg, 'error');
@@ -1626,9 +1674,26 @@ export class PanicComponent implements OnInit, OnDestroy {
         // Check for auth errors
         if (err.status === 401 || err.status === 403) {
           this.toastService.show('Session expired. Please log in again.', 'error');
+        } else if (err.status === 503) {
+          if (err.error?.code === 'GEMINI_QUOTA_EXCEEDED') {
+            this.toastService.show('AI quota exceeded. Please try again in a few minutes.', 'error');
+            this.geminiAvailable = false;
+            this.cdr.markForCheck();
+          } else if (err.error?.code === 'GEMINI_NOT_CONFIGURED') {
+            this.toastService.show('Gemini AI is not connected. Please check server configuration (GEMINI_API_KEY).', 'error');
+          } else {
+            this.toastService.show('Gemini AI is temporarily unavailable. Please try again in a few minutes.', 'error');
+            this.geminiAvailable = false;
+            this.cdr.markForCheck();
+          }
+        } else if (err.status === 500) {
+          const backendMsg = err.error?.error || err.error?.details || '';
+          this.toastService.show(
+            backendMsg ? `AI error: ${backendMsg}` : 'AI support is temporarily unavailable. Please try again.',
+            'error'
+          );
         } else {
-          // Show detailed error in dev mode
-          const errorMsg = process.env['NODE_ENV'] === 'development' 
+          const errorMsg = !environment.production
             ? `Send failed: ${err.status} ${err.statusText} - ${err.error?.error || err.message}`
             : 'Failed to send message. Please try again.';
           this.toastService.show(errorMsg, 'error');
@@ -1790,10 +1855,20 @@ export class PanicComponent implements OnInit, OnDestroy {
         error: (err) => {
           this.isAILoading = false;
           console.error('[Panic] AI error:', err);
-          this.toastService.show(
-            err.error?.message || 'Failed to send message. Please try again.',
-            'error'
-          );
+          if (err.status === 503 || err.error?.code === 'GEMINI_NOT_CONFIGURED') {
+            this.toastService.show('Gemini AI is not connected. Please check server configuration (GEMINI_API_KEY).', 'error');
+          } else if (err.status === 500) {
+            const backendMsg = err.error?.error || err.error?.details || '';
+            this.toastService.show(
+              backendMsg ? `AI error: ${backendMsg}` : 'AI support is temporarily unavailable. Please try again.',
+              'error'
+            );
+          } else {
+            this.toastService.show(
+              err.error?.error || err.error?.message || 'Failed to send message. Please try again.',
+              'error'
+            );
+          }
         },
       });
     } catch (error: any) {
@@ -2050,7 +2125,7 @@ export class PanicComponent implements OnInit, OnDestroy {
     } catch (error: any) {
       console.error('[Panic] TTS error:', error);
       this.toastService.show(
-        error.message || 'Couldn\'t play audio. Check Azure Speech key/region.',
+        error.message || 'Couldn\'t play audio. Check backend TTS and browser audio.',
         'error'
       );
     }
@@ -2142,7 +2217,7 @@ export class PanicComponent implements OnInit, OnDestroy {
     } catch (error: any) {
       console.error('[Panic] TTS error:', error);
       this.toastService.show(
-        error.message || 'Couldn\'t play audio. Check Azure Speech key/region.',
+        error.message || 'Couldn\'t play audio. Check backend TTS and browser audio.',
         'error'
       );
       this.isSpeaking = false;

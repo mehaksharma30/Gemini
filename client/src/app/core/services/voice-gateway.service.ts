@@ -17,8 +17,15 @@ const MIN_BUFFER_PACKETS = 10; // ~200ms buffer before starting playback (reduce
 const MAX_BUFFER_PACKETS = 30; // ~600ms max buffer (reduced from 50)
 const LOW_BUFFER_THRESHOLD = 5; // Pause scheduling if buffer drops below this (reduced from 12 for faster recovery)
 
-// Voice Gateway WebSocket URL (from environment)
-const GATEWAY_URL = environment.voiceGatewayUrl;
+// Voice Gateway WebSocket URL: env or same-origin at runtime (avoids mixed content)
+function getVoiceGatewayUrl(): string {
+  if (environment.voiceGatewayUrl) return environment.voiceGatewayUrl;
+  if (typeof window !== 'undefined' && window?.location) {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}/voice-gateway`;
+  }
+  return 'ws://localhost:3000/voice-gateway';
+}
 
 // Downsample audio to 16kHz using linear interpolation
 function downsampleTo16k(inputFloat32: Float32Array, inputRate: number): Float32Array {
@@ -214,8 +221,8 @@ export class VoiceGatewayService {
     return new Promise((resolve, reject) => {
 
       try {
-        // Build WebSocket URL
-        const baseUrl = GATEWAY_URL;
+        // Build WebSocket URL (same-origin when voiceGatewayUrl empty)
+        const baseUrl = getVoiceGatewayUrl();
         // CRITICAL: Normalize callId (trim whitespace) to prevent mismatches
         const normalizedCallId = this.callId.trim();
         const normalizedUserId = this.userId.trim();

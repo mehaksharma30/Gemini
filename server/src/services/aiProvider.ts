@@ -25,7 +25,8 @@ export async function generateChatReply(
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
 ): Promise<string> {
   const genAI = getGeminiClient();
-  const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  // Use a current Gemini model (gemini-1.5-flash is deprecated; 2.0/2.5 are current)
+  const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
   const model = genAI.getGenerativeModel({
     model: modelName,
     systemInstruction: systemPrompt,
@@ -74,7 +75,8 @@ export async function generateChatReply(
  */
 export async function generateFromPrompt(prompt: string): Promise<string> {
   const genAI = getGeminiClient();
-  const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  // Use a current Gemini model (gemini-1.5-flash is deprecated; 2.0/2.5 are current)
+  const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
   const model = genAI.getGenerativeModel({
     model: modelName,
     generationConfig: {
@@ -88,6 +90,40 @@ export async function generateFromPrompt(prompt: string): Promise<string> {
   const text = response.text?.()?.trim() ?? '';
 
   return text || "I'm here with you. Take a deep breath. You're not alone. If you need immediate support, please reach out to someone you trust or use the emergency contacts feature in this app.";
+}
+
+/**
+ * Check if Gemini is configured and reachable (for status/health).
+ * Returns { ok: true, model } on success, or { ok: false, error } on failure.
+ */
+export async function checkGeminiStatus(): Promise<{ ok: boolean; model?: string; error?: string }> {
+  const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  if (!process.env.GEMINI_API_KEY) {
+    return { ok: false, error: 'GEMINI_API_KEY is not set' };
+  }
+  try {
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({
+      model: modelName,
+      generationConfig: { maxOutputTokens: 10, temperature: 0 },
+    });
+    const result = await model.generateContent('Reply with exactly: OK');
+    const text = result.response.text?.()?.trim() ?? '';
+    if (!text) {
+      return { ok: false, error: 'Empty response from Gemini', model: modelName };
+    }
+    return { ok: true, model: modelName };
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    const quotaExceeded = msg.includes('429') || msg.includes('quota') || msg.includes('Too Many Requests');
+    return {
+      ok: false,
+      error: quotaExceeded
+        ? 'Gemini quota exceeded (free tier limit). Wait a few minutes or check https://ai.google.dev/gemini-api/docs/rate-limits'
+        : msg.length > 200 ? msg.substring(0, 200) + '...' : msg,
+      model: modelName,
+    };
+  }
 }
 
 /**

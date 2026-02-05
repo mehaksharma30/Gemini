@@ -28,12 +28,12 @@ export class ChatSocketService {
       return;
     }
 
-    // CRITICAL: Extract base URL from apiUrl (remove /api if present)
-    // Socket.IO connects to the base server URL, not /api
-    const baseUrl = environment.apiUrl.replace(/\/api\/?$/, '');
-    
+    // Same-origin: base URL from apiUrl or window.location (no baked-in host)
+    let baseUrl = environment.apiUrl.replace(/\/api\/?$/, '').trim();
+    if (!baseUrl && typeof window !== 'undefined' && window.location) baseUrl = window.location.origin;
+
     // Socket.IO configuration - prioritize WebSocket first
-    this.socket = io(baseUrl, {
+    this.socket = io(baseUrl || undefined, {
       // CRITICAL: Explicit path for Socket.IO (must match server configuration)
       path: '/socket.io',
       // CRITICAL: Use websocket transport (with polling fallback for compatibility)

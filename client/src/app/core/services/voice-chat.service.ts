@@ -1,6 +1,5 @@
 import { Injectable } from '@angular/core';
-import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
-import { AIPanicService, ChatMessage } from './ai-panic.service';
+import { AIPanicService } from './ai-panic.service';
 import { AuthService } from './auth.service';
 import { environment } from '../../../environments/environment';
 
@@ -19,195 +18,144 @@ export class VoiceChatService {
     private aiPanicService: AIPanicService,
     private authService: AuthService
   ) {
-    console.log('[Voice Chat] Service initialized');
+    console.log('[Voice Chat] Service initialized (Google STT/TTS via backend)');
   }
 
-  /**
-   * Get Azure Speech token from backend
-   */
-  private async getSpeechToken(): Promise<{ token: string; region: string }> {
-    try {
-      const authToken = this.authService.getToken();
-      if (!authToken) {
-        console.error('[Voice Chat] No auth token found');
-        throw new Error('Not authenticated. Please log in first.');
-      }
-
-      const url = `${this.apiUrl}/ai/speech/token`;
-      console.log('[Voice Chat] Fetching token from:', url);
-      console.log('[Voice Chat] Auth token present:', !!authToken);
-      
-      const response = await fetch(url, {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
-      }).catch((fetchError) => {
-        console.error('[Voice Chat] Fetch error details:', fetchError);
-        throw new Error(`Network error: ${fetchError.message}. Make sure the backend server is running.`);
-      });
-
-      console.log('[Voice Chat] Token response status:', response.status);
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: response.statusText }));
-        console.error('[Voice Chat] Token error response:', errorData);
-        throw new Error(`Failed to get speech token: ${response.status} ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      console.log('[Voice Chat] Token received, region:', data.region);
-      return { token: data.token, region: data.region };
-    } catch (error: any) {
-      console.error('[Voice Chat] Token fetch error:', error);
-      // Provide more helpful error messages
-      if (error.message.includes('Network error') || error.message.includes('Failed to fetch')) {
-        throw new Error('Cannot connect to server. Please make sure the backend is running.');
-      }
-      throw new Error(`Failed to get speech token: ${error.message}`);
+  private ensureBrowserMicAvailable(): void {
+    const isSecure = typeof window !== 'undefined' ? (window as any).isSecureContext === true : false;
+    const mediaDevices = typeof navigator !== 'undefined' ? (navigator as any).mediaDevices : undefined;
+    const hasGetUserMedia = !!mediaDevices?.getUserMedia;
+    if (!hasGetUserMedia) {
+      const reason = isSecure ? 'Browser microphone API unavailable.' : 'Microphone requires HTTPS (secure context).';
+      throw new Error(`${reason} Please use HTTPS (recommended) or type your message instead.`);
     }
   }
 
   /**
-   * Start voice chat: Listen → Transcribe → Send to AI → Speak response
-   * Returns the recognized text and AI response for UI updates
+   * Play TTS via backend POST /api/ai/tts (Google Cloud TTS)
    */
-  async startVoice(): Promise<VoiceChatResult | null> {
-    try {
-      console.log('[Voice Chat] Starting voice chat...');
+  private async playTts(text: string): Promise<void> {
+    const authToken = this.authService.getToken();
+    if (!authToken) throw new Error('Not authenticated. Please log in first.');
 
-      // Step 1: Get Azure Speech token
-      console.log('[Voice Chat] Fetching Azure Speech token...');
-      const { token, region } = await this.getSpeechToken();
-      console.log('[Voice Chat] Token received');
+    const response = await fetch(`${this.apiUrl}/ai/tts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ text, lang: 'en' }),
+    });
 
-      // Step 2: Create speech config with token
-      const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(token, region);
-      speechConfig.speechRecognitionLanguage = 'en-US';
-      speechConfig.speechSynthesisVoiceName = 'en-US-JennyNeural';
-
-      // Step 3: Request microphone access
-      console.log('[Voice Chat] Requesting microphone access...');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      console.log('[Voice Chat] Microphone access granted');
-
-      // Step 4: Create audio config and recognizer
-      const audioConfig = SpeechSDK.AudioConfig.fromMicrophoneInput();
-      const recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
-
-      // Step 5: Recognize speech (STT)
-      console.log('[Voice Chat] Listening for speech...');
-      
-      return new Promise<VoiceChatResult | null>((resolve, reject) => {
-        recognizer.recognizeOnceAsync(
-          async (result) => {
-            // Cleanup microphone
-            stream.getTracks().forEach(track => track.stop());
-            audioConfig.close();
-            recognizer.close();
-
-            if (result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
-              const userText = result.text.trim();
-              
-              if (!userText) {
-                console.warn('[Voice Chat] No speech detected');
-                resolve(null);
-                return;
-              }
-
-              console.log('[Voice Chat] Recognized text:', userText);
-
-              // Step 6: Send text to existing chat endpoint
-              console.log('[Voice Chat] Sending to AI...');
-              try {
-                const response = await this.aiPanicService.sendMessageAsync({
-                  message: userText,
-                  history: [], // Can be enhanced to maintain conversation history
-                });
-
-                if (response && response.success && response.message) {
-                  const aiText = response.message;
-                  console.log('[Voice Chat] AI response:', aiText);
-
-                  // Step 7: Speak AI response (TTS)
-                  console.log('[Voice Chat] Speaking AI response...');
-                  await this.speakText(aiText, speechConfig);
-                  console.log('[Voice Chat] Voice chat complete');
-
-                  // Return result for UI updates
-                  resolve({ userText, aiText });
-                } else {
-                  console.error('[Voice Chat] Failed to get AI response');
-                  resolve(null);
-                }
-              } catch (error: any) {
-                console.error('[Voice Chat] AI error:', error);
-                resolve(null);
-              }
-            } else if (result.reason === SpeechSDK.ResultReason.NoMatch) {
-              console.warn('[Voice Chat] No speech match detected');
-              resolve(null);
-            } else {
-              console.error('[Voice Chat] Recognition failed:', result.reason);
-              resolve(null);
-            }
-          },
-          (error) => {
-            // Cleanup on error
-            stream.getTracks().forEach(track => track.stop());
-            audioConfig.close();
-            recognizer.close();
-            console.error('[Voice Chat] Recognition error:', error);
-            reject(error);
-          }
-        );
-      });
-    } catch (error: any) {
-      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-        console.error('[Voice Chat] Microphone permission denied');
-        throw new Error('Microphone permission denied. Please allow microphone access.');
-      } else {
-        console.error('[Voice Chat] Error:', error);
-        throw error;
-      }
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(err.error || err.message || `TTS failed: ${response.status}`);
     }
-  }
 
-  /**
-   * Speak text using Azure TTS
-   */
-  private async speakText(text: string, speechConfig: SpeechSDK.SpeechConfig): Promise<void> {
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
     return new Promise((resolve, reject) => {
-      const synthesizer = new SpeechSDK.SpeechSynthesizer(speechConfig, null);
-
-      synthesizer.speakTextAsync(
-        text,
-        (result) => {
-          synthesizer.close();
-          if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
-            console.log('[Voice Chat] TTS completed');
-            resolve();
-          } else {
-            console.error('[Voice Chat] TTS failed:', result.reason);
-            reject(new Error(`TTS failed: ${result.reason}`));
-          }
-        },
-        (error) => {
-          synthesizer.close();
-          console.error('[Voice Chat] TTS error:', error);
-          reject(error);
-        }
-      );
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+      audio.onerror = (e) => {
+        URL.revokeObjectURL(url);
+        reject(new Error('Failed to play audio'));
+      };
+      audio.play().catch(reject);
     });
   }
 
   /**
-   * Stop voice chat (cleanup if needed)
+   * Start voice chat: Record → Server STT → AI chat → Server TTS.
+   * No Azure token/region; uses Google STT/TTS via backend.
    */
+  async startVoice(): Promise<VoiceChatResult | null> {
+    try {
+      console.log('[Voice Chat] Starting voice chat (server STT/TTS)...');
+      this.ensureBrowserMicAvailable();
+
+      const authToken = this.authService.getToken();
+      if (!authToken) {
+        throw new Error('Not authenticated. Please log in first.');
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+      const chunks: Blob[] = [];
+
+      const userText = await new Promise<string | null>((resolve, reject) => {
+        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+        mediaRecorder.onstop = async () => {
+          stream.getTracks().forEach((t) => t.stop());
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          const formData = new FormData();
+          formData.append('audio', blob, 'recording.webm');
+          formData.append('lang', 'en-US');
+
+          try {
+            const res = await fetch(`${this.apiUrl}/ai/speech/transcribe`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${authToken}` },
+              body: formData,
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              reject(new Error(err.error || err.details || `Transcription failed: ${res.status}`));
+              return;
+            }
+            const data = await res.json();
+            const text = (data.text || '').trim();
+            resolve(text || null);
+          } catch (e: any) {
+            reject(e);
+          }
+        };
+        mediaRecorder.onerror = () => {
+          stream.getTracks().forEach((t) => t.stop());
+          reject(new Error('Recording failed'));
+        };
+        mediaRecorder.start();
+        setTimeout(() => {
+          if (mediaRecorder.state === 'recording') mediaRecorder.stop();
+        }, 5000);
+      });
+
+      if (!userText) {
+        console.warn('[Voice Chat] No speech detected');
+        return null;
+      }
+
+      console.log('[Voice Chat] Recognized text:', userText);
+
+      const response = await this.aiPanicService.sendMessageAsync({
+        message: userText,
+        history: [],
+      });
+
+      if (!response?.success || !response?.message) {
+        console.error('[Voice Chat] Failed to get AI response');
+        return null;
+      }
+
+      const aiText = response.message;
+      console.log('[Voice Chat] AI response:', aiText);
+      console.log('[Voice Chat] Speaking AI response...');
+      await this.playTts(aiText);
+      console.log('[Voice Chat] Voice chat complete');
+      return { userText, aiText };
+    } catch (error: any) {
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        throw new Error('Microphone permission denied. Please allow microphone access.');
+      }
+      throw error;
+    }
+  }
+
   stop(): void {
-    // Cleanup handled in recognizeOnceAsync callbacks
     console.log('[Voice Chat] Stopped');
   }
 }

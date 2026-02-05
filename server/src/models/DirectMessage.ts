@@ -15,7 +15,7 @@ const directMessageSchema = new Schema<IDirectMessage>(
       type: Schema.Types.ObjectId,
       ref: 'Conversation',
       required: true,
-      index: true,
+      // index via compound below with createdAt
     },
     senderId: {
       type: Schema.Types.ObjectId,

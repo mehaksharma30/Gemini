@@ -1,5 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import { Server as HttpServer } from 'http';
+import { IncomingMessage, Server as HttpServer } from 'http';
 
 const PING_INTERVAL = 10000; // 10 seconds - more frequent keepalive for better connection stability
 
@@ -22,98 +22,41 @@ const connections = new Map<WebSocket, {
  * Attaches to the existing HTTP server
  */
 export function initializeVoiceGateway(httpServer: HttpServer): void {
-  // Create WebSocket server without path restriction (we'll handle paths in verifyClient)
-  const wss = new WebSocketServer({ 
-    server: httpServer,
-    // Don't set path here - we'll handle multiple paths in verifyClient
+  // IMPORTANT:
+  // Do NOT attach a ws server directly to `httpServer` without filtering upgrades,
+  // otherwise it will intercept and break Socket.IO's `/socket.io` websocket upgrades.
+  //
+  // We use `noServer: true` and manually handle upgrades for only:
+  // - `/voice-gateway` (and `/voice-gateway/`)
+  // - `/vo_<session>` (legacy/back-compat)
+  const wss = new WebSocketServer({
+    noServer: true,
     perMessageDeflate: false, // Disable compression for lower latency
     clientTracking: true,
-    verifyClient: (info: { origin?: string; req: any; secure: boolean }) => {
-      // Get allowed origins from environment (same as CORS)
-      const allowedOrigins = process.env.FRONTEND_ORIGINS 
-        ? process.env.FRONTEND_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
-        : [
-            'http://localhost:4200'
-          ];
-      
-      // Add legacy FRONTEND_URL if present
-      if (process.env.FRONTEND_URL) {
-        const legacyUrl = process.env.FRONTEND_URL.trim();
-        if (!allowedOrigins.includes(legacyUrl)) {
-          allowedOrigins.push(legacyUrl);
-        }
-      }
-      
-      // CRITICAL: Check path FIRST before logging (to avoid intercepting Socket.IO)
-      const pathname = info.req.url?.split('?')[0] || '';
-      
-      // CRITICAL: Allow Socket.IO paths to pass through silently (don't intercept them)
-      // Socket.IO uses /socket.io path and has its own WebSocket server
-      // Return false silently to let Socket.IO handle it (our verifyClient only handles voice-gateway)
-      const isSocketIOPath = pathname === '/socket.io' || pathname.startsWith('/socket.io/');
-      if (isSocketIOPath) {
-        // Don't log or process Socket.IO connections - let Socket.IO server handle them
-        return false;
-      }
-      
-      // Log connection attempts for debugging (PRODUCTION CRITICAL)
-      // Only log voice-gateway connections, not Socket.IO
-      const origin = info.origin || 'unknown origin';
-      const host = info.req.headers.host || 'unknown';
-      const userAgent = info.req.headers['user-agent'] || 'unknown';
-      const xForwardedFor = info.req.headers['x-forwarded-for'] || 'none';
-      const xForwardedProto = info.req.headers['x-forwarded-proto'] || 'none';
-      
-      console.log(`[Voice Gateway] 🔄🔍 CONNECTION ATTEMPT - ${new Date().toISOString()}`);
-      console.log(`[Voice Gateway] Origin: ${origin}`);
-      console.log(`[Voice Gateway] Path: ${pathname}`);
-      console.log(`[Voice Gateway] Full URL: ${info.req.url}`);
-      console.log(`[Voice Gateway] Host: ${host}`);
-      console.log(`[Voice Gateway] Secure: ${info.secure}`);
-      console.log(`[Voice Gateway] X-Forwarded-For: ${xForwardedFor}`);
-      console.log(`[Voice Gateway] X-Forwarded-Proto: ${xForwardedProto}`);
-      console.log(`[Voice Gateway] Upgrade header: ${info.req.headers.upgrade}`);
-      console.log(`[Voice Gateway] Connection header: ${info.req.headers.connection}`);
-      console.log(`[Voice Gateway] User-Agent: ${userAgent}`);
-      
-      // Accept both /voice-gateway and /vo_* paths (for backward compatibility and different client implementations)
+  });
+
+  httpServer.on('upgrade', (req: IncomingMessage, socket, head) => {
+    try {
+      const url = req.url || '';
+      const pathname = url.split('?')[0] || '';
+
       const isVoiceGatewayPath = pathname === '/voice-gateway' || pathname === '/voice-gateway/';
       const isVoSessionPath = pathname.startsWith('/vo_');
-      
+
+      // Let other upgrade handlers (e.g. Socket.IO) process non-voice paths
       if (!isVoiceGatewayPath && !isVoSessionPath) {
-        console.warn(`[Voice Gateway] ❌ Rejected connection to invalid path: ${pathname}`);
-        console.warn(`[Voice Gateway] Expected paths: /voice-gateway or /vo_<session>`);
-        return false;
+        return;
       }
-      
-      // CRITICAL FIX: Detect watchOS/iOS clients and allow them
-      // WatchOS and iOS WebSocket clients often don't send proper origin headers
-      const isWatchOS = userAgent.includes('Watch') || userAgent.includes('watchOS');
-      const isIOS = userAgent.includes('iPhone') || userAgent.includes('iPad') || userAgent.includes('iOS');
-      const isMobile = isWatchOS || isIOS;
-      
-      // CRITICAL: Allow connections from watch/iOS even without proper origin
-      // This is safe because we verify the WebSocket handshake and validate callId/userId
-      if (isMobile) {
-        console.log(`[Voice Gateway] ✅ Allowing mobile/watch connection (User-Agent: ${userAgent.substring(0, 100)})`);
-        console.log(`[Voice Gateway] Device type: ${isWatchOS ? 'watchOS' : isIOS ? 'iOS' : 'unknown mobile'}`);
-        return true;
+
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, req);
+      });
+    } catch (e) {
+      try {
+        socket.destroy();
+      } catch {
+        // ignore
       }
-      
-      // For non-mobile clients, verify origin (for production security)
-      const isProduction = process.env.NODE_ENV === 'production';
-      if (isProduction && origin !== 'unknown origin' && !allowedOrigins.includes(origin)) {
-        // CRITICAL: Also allow if origin is missing/null (some clients don't send it)
-        // Only block if origin is explicitly set to a disallowed value
-        if (origin && origin !== 'null' && origin !== 'unknown origin') {
-          console.warn(`[Voice Gateway] ❌ Rejected connection from unauthorized origin: ${origin}`);
-          console.warn(`[Voice Gateway] Allowed origins: ${allowedOrigins.join(', ')}`);
-          return false;
-        }
-      }
-      
-      console.log(`[Voice Gateway] ✅ Accepting connection to ${pathname} from ${origin}`);
-      return true;
     }
   });
 

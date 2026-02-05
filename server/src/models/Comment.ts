@@ -15,7 +15,7 @@ const commentSchema = new Schema<IComment>(
       type: Schema.Types.ObjectId,
       ref: 'Post',
       required: [true, 'Post ID is required'],
-      index: true,
+      // index via compound below with createdAt
     },
     authorId: {
       type: Schema.Types.ObjectId,

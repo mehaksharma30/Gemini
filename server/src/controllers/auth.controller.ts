@@ -75,7 +75,7 @@ export const register = async (req: Request, res: Response) => {
 
 export const login = async (req: Request, res: Response) => {
   try {
-
+    console.log('[Auth] POST /login attempt', req.body?.username ?? '(no username)');
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ errors: errors.array() });

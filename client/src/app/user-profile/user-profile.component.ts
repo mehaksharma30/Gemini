@@ -5,11 +5,13 @@ import { UserService, UserProfile } from '../core/services/user.service';
 import { Post } from '../core/models/post.model';
 import { PostCardComponent } from '../posts/post-card/post-card.component';
 import { AuthService } from '../core/services/auth.service';
+import { PostService } from '../core/services/post.service';
+import { ModalComponent } from '../core/components/modal/modal.component';
 
 @Component({
   selector: 'app-user-profile',
   standalone: true,
-  imports: [CommonModule, PostCardComponent],
+  imports: [CommonModule, PostCardComponent, ModalComponent],
   template: `
     <div class="profile-container">
       <div class="container">
@@ -72,7 +74,7 @@ import { AuthService } from '../core/services/auth.service';
                 [post]="post"
                 [currentUserId]="currentUserId"
                 (edit)="onEdit(post)"
-                (delete)="onDelete(post)"
+                (delete)="openDeleteConfirm(post)"
               ></app-post-card>
             </div>
 
@@ -82,6 +84,19 @@ import { AuthService } from '../core/services/auth.service';
           </div>
         </div>
       </div>
+
+      <app-modal
+        [isOpen]="!!postToDelete"
+        title="Delete post"
+        [showFooter]="true"
+        (close)="closeDeleteConfirm()"
+      >
+        <p class="confirm-message">Delete this post permanently?</p>
+        <div footer>
+          <button type="button" class="btn-cancel" (click)="closeDeleteConfirm()">Cancel</button>
+          <button type="button" class="btn-delete" (click)="confirmDelete()">Delete</button>
+        </div>
+      </app-modal>
     </div>
   `,
   styles: [`
@@ -319,6 +334,12 @@ import { AuthService } from '../core/services/auth.service';
         justify-content: center;
       }
     }
+
+    .confirm-message { margin: 0; color: var(--text-primary); }
+    .btn-cancel, .btn-delete { padding: 0.5rem 1rem; border-radius: 8px; font-weight: 600; cursor: pointer; border: none; }
+    .btn-cancel { background: var(--c-bg-1); color: var(--text-primary); border: 1px solid var(--border-color); }
+    .btn-delete { background: #dc3545; color: #fff; }
+    .btn-delete:hover { background: #c82333; }
   `]
 })
 export class UserProfileComponent implements OnInit {
@@ -326,6 +347,7 @@ export class UserProfileComponent implements OnInit {
   private router = inject(Router);
   private userService = inject(UserService);
   private authService = inject(AuthService);
+  private postService = inject(PostService);
 
   profile: UserProfile | null = null;
   posts: Post[] = [];
@@ -407,15 +429,31 @@ export class UserProfileComponent implements OnInit {
     this.router.navigate(['/messages', this.userId]);
   }
 
+  postToDelete: Post | null = null;
+
   onEdit(post: Post): void {
     this.router.navigate(['/posts', post._id, 'edit']);
   }
 
-  onDelete(post: Post): void {
-    if (!confirm('Delete this post permanently?')) {
-      return;
-    }
+  openDeleteConfirm(post: Post): void {
+    this.postToDelete = post;
+  }
 
-    this.posts = this.posts.filter((p) => p._id !== post._id);
+  closeDeleteConfirm(): void {
+    this.postToDelete = null;
+  }
+
+  confirmDelete(): void {
+    if (!this.postToDelete) return;
+    const post = this.postToDelete;
+    this.postToDelete = null;
+    this.postService.deletePost(post._id).subscribe({
+      next: () => {
+        this.posts = this.posts.filter((p) => p._id !== post._id);
+      },
+      error: () => {
+        this.postToDelete = post;
+      },
+    });
   }
 }

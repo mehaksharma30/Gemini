@@ -32,7 +32,7 @@ const emergencyContactsSchema = new Schema<IEmergencyContacts>(
   }
 );
 
-emergencyContactsSchema.index({ ownerUserId: 1 });
+// ownerUserId already has unique: true in schema (creates unique index); no extra index needed
 
 const EmergencyContacts = mongoose.model<IEmergencyContacts>('EmergencyContacts', emergencyContactsSchema);
 

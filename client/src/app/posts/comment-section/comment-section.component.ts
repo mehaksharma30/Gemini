@@ -4,11 +4,12 @@ import { FormsModule } from '@angular/forms';
 import { Comment } from '../../core/models/comment.model';
 import { CommentService } from '../../core/services/comment.service';
 import { AuthService } from '../../core/services/auth.service';
+import { ModalComponent } from '../../core/components/modal/modal.component';
 
 @Component({
   selector: 'app-comment-section',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, ModalComponent],
   template: `
     <div class="comment-section">
       <div class="comment-header">
@@ -53,7 +54,7 @@ import { AuthService } from '../../core/services/auth.service';
             <button
               *ngIf="canDeleteComment(comment)"
               class="delete-comment-btn"
-              (click)="deleteComment(comment._id)"
+              (click)="openDeleteConfirm(comment._id)"
             >
               Delete
             </button>
@@ -64,6 +65,19 @@ import { AuthService } from '../../core/services/auth.service';
       <div class="no-comments" *ngIf="comments.length === 0">
         <p>No comments yet. Be the first to share your thoughts!</p>
       </div>
+
+      <app-modal
+        [isOpen]="!!commentIdToDelete"
+        title="Delete comment"
+        [showFooter]="true"
+        (close)="closeDeleteConfirm()"
+      >
+        <p class="confirm-message">Delete this comment?</p>
+        <div footer>
+          <button type="button" class="btn-cancel" (click)="closeDeleteConfirm()">Cancel</button>
+          <button type="button" class="btn-delete" (click)="confirmDeleteComment()">Delete</button>
+        </div>
+      </app-modal>
     </div>
   `,
   styles: [`
@@ -250,6 +264,12 @@ import { AuthService } from '../../core/services/auth.service';
         font-size: 0.9rem;
       }
     }
+
+    .confirm-message { margin: 0; color: var(--text-primary); }
+    .btn-cancel, .btn-delete { padding: 0.5rem 1rem; border-radius: 8px; font-weight: 600; cursor: pointer; border: none; }
+    .btn-cancel { background: var(--c-bg-1); color: var(--text-primary); border: 1px solid var(--border-color); }
+    .btn-delete { background: #dc3545; color: #fff; }
+    .btn-delete:hover { background: #c82333; }
   `]
 })
 export class CommentSectionComponent implements OnInit {
@@ -301,9 +321,20 @@ export class CommentSectionComponent implements OnInit {
     });
   }
 
-  deleteComment(commentId: string): void {
-    if (!confirm('Delete this comment?')) return;
+  commentIdToDelete: string | null = null;
 
+  openDeleteConfirm(commentId: string): void {
+    this.commentIdToDelete = commentId;
+  }
+
+  closeDeleteConfirm(): void {
+    this.commentIdToDelete = null;
+  }
+
+  confirmDeleteComment(): void {
+    if (!this.commentIdToDelete) return;
+    const commentId = this.commentIdToDelete;
+    this.commentIdToDelete = null;
     this.commentService.deleteComment(commentId).subscribe({
       next: () => {
         this.comments = this.comments.filter((c) => c._id !== commentId);
@@ -311,6 +342,7 @@ export class CommentSectionComponent implements OnInit {
       },
       error: (err) => {
         console.error('Failed to delete comment:', err);
+        this.commentIdToDelete = commentId;
       },
     });
   }
