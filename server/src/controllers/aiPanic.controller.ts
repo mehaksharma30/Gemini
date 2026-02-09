@@ -94,22 +94,18 @@ export const panicChat = async (req: Request, res: Response) => {
     let userPosts: Array<{ title: string; content: string; tags: string[]; createdAt: Date }> = [];
     try {
       console.log(`[AI] [${requestId}] Fetching user posts for context - userId: ${userId}`);
-      
-      // Try ObjectId query first (most common case)
-      let posts = await Post.find({ 
-        authorId: new mongoose.Types.ObjectId(userId) 
-      })
-        .sort({ createdAt: -1 })
-        .limit(10)
-        .select('title content tags createdAt')
-        .lean();
-      
-      // If no posts found with ObjectId, try string match as fallback
+
+      let posts: any[] = [];
+      if (mongoose.Types.ObjectId.isValid(userId)) {
+        const oid = new mongoose.Types.ObjectId(userId);
+        posts = await Post.find({ $or: [{ authorId: oid }, { authorId: userId }] })
+          .sort({ createdAt: -1 })
+          .limit(10)
+          .select('title content tags createdAt')
+          .lean();
+      }
       if (posts.length === 0) {
-        console.log(`[AI] [${requestId}] No posts found with ObjectId, trying string match fallback`);
-        posts = await Post.find({ 
-          authorId: userId 
-        })
+        posts = await Post.find({ authorId: userId })
           .sort({ createdAt: -1 })
           .limit(10)
           .select('title content tags createdAt')

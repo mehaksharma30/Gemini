@@ -1,49 +1,122 @@
 /**
  * Single AI provider module — only place that talks to LLM (Gemini).
- * Exposes the same function shapes the rest of the app expects.
- * Env: GEMINI_API_KEY
+ * Uses v1beta REST API directly for reliable response parsing.
+ * Env: GEMINI_API_KEY, GEMINI_MODEL (optional, default gemini-2.0-flash)
  */
-
-import { GoogleGenerativeAI } from '@google/generative-ai';
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
-function getGeminiClient(): GoogleGenerativeAI {
+const GEMINI_V1BETA =
+  'https://generativelanguage.googleapis.com/v1beta';
+
+function getModelName(): string {
+  return process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+}
+
+function getApiKey(): string {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY is required. Please configure it in your environment variables.');
   }
-  return new GoogleGenerativeAI(apiKey);
+  return apiKey;
 }
 
 /**
- * Generate a chat reply from system prompt + messages (same shape as former getOpenAIText).
+ * Parse text from Gemini REST response.
+ * Path: candidates?.[0]?.content?.parts?.[0]?.text
+ */
+function extractTextFromResponse(json: any): string | null {
+  const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+  return typeof text === 'string' ? text.trim() || null : null;
+}
+
+/**
+ * Call Gemini v1beta generateContent REST API.
+ * Throws with logged full JSON if response structure is unexpected.
+ */
+async function generateContentRest(
+  prompt: string,
+  options?: {
+    systemInstruction?: string;
+    history?: Array<{ role: 'user' | 'model'; parts: { text: string }[] }>;
+    maxOutputTokens?: number;
+    temperature?: number;
+  }
+): Promise<string> {
+  const modelName = getModelName();
+  const apiKey = getApiKey();
+  const url = `${GEMINI_V1BETA}/models/${modelName}:generateContent?key=${apiKey}`;
+
+  const contents: any[] = [];
+  if (options?.history?.length) {
+    for (const item of options.history) {
+      contents.push({ role: item.role, parts: item.parts });
+    }
+  }
+  contents.push({ role: 'user', parts: [{ text: prompt }] });
+
+  const body: any = {
+    contents,
+    generationConfig: {
+      maxOutputTokens: options?.maxOutputTokens ?? 2000,
+      temperature: options?.temperature ?? 0.7,
+    },
+  };
+  if (options?.systemInstruction) {
+    body.systemInstruction = {
+      parts: [{ text: options.systemInstruction }],
+    };
+  }
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const json = (await res.json().catch(() => ({}))) as {
+    error?: { message?: string };
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>;
+  };
+
+  if (!res.ok) {
+    const errMsg = json?.error?.message || res.statusText;
+    console.error('[AI Provider] Gemini API error:', res.status, errMsg);
+    throw new Error(errMsg);
+  }
+
+  const text = extractTextFromResponse(json);
+  if (text != null) {
+    return text;
+  }
+
+  const finishReason = json?.candidates?.[0]?.finishReason;
+  const errDetail = finishReason === 'MAX_TOKENS'
+    ? ' (increase maxOutputTokens; thinking models use tokens before text)'
+    : '';
+  console.error('[AI Provider] Empty or unexpected Gemini response. Full JSON:', JSON.stringify(json, null, 2));
+  throw new Error(`Empty response from Gemini: unexpected response structure${errDetail}`);
+}
+
+/**
+ * Generate a chat reply from system prompt + messages.
  * Used by ai.controller (AI Talk) and search keyword extraction.
  */
 export async function generateChatReply(
   systemPrompt: string,
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
 ): Promise<string> {
-  const genAI = getGeminiClient();
-  // Use a current Gemini model (gemini-1.5-flash is deprecated; 2.0/2.5 are current)
-  const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    systemInstruction: systemPrompt,
-    generationConfig: {
+  const fallback = "I'm here—can you say that again in one line?";
+  if (messages.length === 0) {
+    const text = await generateContentRest('Hello', {
+      systemInstruction: systemPrompt,
       maxOutputTokens: 2000,
       temperature: 0.7,
-    },
-  });
-
-  if (messages.length === 0) {
-    const result = await model.generateContent('Hello');
-    const text = result.response.text?.()?.trim() ?? '';
-    return text || "I'm here—can you say that again in one line?";
+    });
+    return text || fallback;
   }
 
-  // Build history for Gemini: 'user' and 'model' (assistant)
-  const history: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];
+  const history: Array<{ role: 'user' | 'model'; parts: { text: string }[] }> = [];
   for (const msg of messages) {
     const role = msg.role === 'assistant' ? 'model' : 'user';
     history.push({ role, parts: [{ text: msg.content }] });
@@ -51,65 +124,46 @@ export async function generateChatReply(
 
   const lastMsg = messages[messages.length - 1];
   const lastContent = lastMsg.content;
+  const historyForApi = history.slice(0, -1);
 
-  if (history.length <= 1) {
-    // Single message: use generateContent
-    const result = await model.generateContent(lastContent);
-    const text = result.response.text?.()?.trim() ?? '';
-    return text || "I'm here—can you say that again in one line?";
-  }
-
-  // Multi-turn: startChat with history (all but last), then send last message
-  const chatHistory = history.slice(0, -1);
-  const chat = model.startChat({ history: chatHistory });
-  const result = await chat.sendMessage(lastContent);
-  const response = result.response;
-  const text = response.text?.()?.trim() ?? '';
-
-  return text || "I'm here—can you say that again in one line?";
+  const text = await generateContentRest(lastContent, {
+    systemInstruction: systemPrompt,
+    history: historyForApi.length ? historyForApi : undefined,
+    maxOutputTokens: 2000,
+    temperature: 0.7,
+  });
+  return text || fallback;
 }
 
 /**
- * Generate reply from a single full prompt string (system + history concatenated).
+ * Generate reply from a single full prompt string.
  * Used by aiPanic.service (panic/support chat).
  */
 export async function generateFromPrompt(prompt: string): Promise<string> {
-  const genAI = getGeminiClient();
-  // Use a current Gemini model (gemini-1.5-flash is deprecated; 2.0/2.5 are current)
-  const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    generationConfig: {
-      maxOutputTokens: 2000,
-      temperature: 0.7,
-    },
+  const fallback =
+    "I'm here with you. Take a deep breath. You're not alone. If you need immediate support, please reach out to someone you trust or use the emergency contacts feature in this app.";
+  const text = await generateContentRest(prompt, {
+    maxOutputTokens: 2000,
+    temperature: 0.7,
   });
-
-  const result = await model.generateContent(prompt);
-  const response = result.response;
-  const text = response.text?.()?.trim() ?? '';
-
-  return text || "I'm here with you. Take a deep breath. You're not alone. If you need immediate support, please reach out to someone you trust or use the emergency contacts feature in this app.";
+  return text || fallback;
 }
 
 /**
- * Check if Gemini is configured and reachable (for status/health).
- * Returns { ok: true, model } on success, or { ok: false, error } on failure.
+ * Check if Gemini is configured and reachable.
+ * Returns { ok: true, model } on success.
  */
 export async function checkGeminiStatus(): Promise<{ ok: boolean; model?: string; error?: string }> {
-  const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  const modelName = getModelName();
   if (!process.env.GEMINI_API_KEY) {
     return { ok: false, error: 'GEMINI_API_KEY is not set' };
   }
   try {
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({
-      model: modelName,
-      generationConfig: { maxOutputTokens: 10, temperature: 0 },
+    const text = await generateContentRest('Reply with exactly: OK', {
+      maxOutputTokens: 64,
+      temperature: 0,
     });
-    const result = await model.generateContent('Reply with exactly: OK');
-    const text = result.response.text?.()?.trim() ?? '';
-    if (!text) {
+    if (!text || !text.trim()) {
       return { ok: false, error: 'Empty response from Gemini', model: modelName };
     }
     return { ok: true, model: modelName };
@@ -127,7 +181,7 @@ export async function checkGeminiStatus(): Promise<{ ok: boolean; model?: string
 }
 
 /**
- * Get search keywords from user query (same shape as former getSearchKeywordsFromOpenAI).
+ * Get search keywords from user query.
  */
 export async function getSearchKeywords(query: string): Promise<string[]> {
   const systemPrompt = `Extract 3-8 concise search keywords/phrases from the user query. Return ONLY a comma-separated list. No extra words.`;

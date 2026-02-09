@@ -3,6 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import { aiChat } from '../controllers/ai.controller';
 import { panicChat } from '../controllers/aiPanic.controller';
+import { debugPosts } from '../controllers/aiDebug.controller';
 import { transcribeAudio } from '../controllers/speech.controller';
 import { textToSpeech, ttsValidation } from '../controllers/tts.controller';
 import { getSpeechToken } from '../controllers/voice.controller';
@@ -21,6 +22,7 @@ const upload = multer({
 });
 
 router.get('/speech/token', getSpeechToken);
+router.get('/debug-posts', debugPosts);
 router.post('/chat', aiChat);
 router.post('/panic-chat', panicChat);
 router.post('/speech/transcribe', upload.single('audio'), transcribeAudio);

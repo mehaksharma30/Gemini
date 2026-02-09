@@ -94,17 +94,9 @@ RULES:
 • NEVER say "I'm here with you" in post replies
 • NEVER repeat the post multiple times
 
-Instead, respond like a friend who remembers:
+Instead, respond like a friend who remembers. Use ONLY what is in the post — nothing else.
 
-EXAMPLE:
-"Yes — you wrote that you had a panic attack and you got through it using music, breathing exercises, and by sharing with people who understood."
-
-If user asks follow-up:
-"What else did I mention?"
-→ Answer ONLY from the post content, calmly and accurately.
-
-DO NOT add steps or words that were NOT in the post.
-DO NOT hallucinate.
+CRITICAL: If the user asks "what else?" or "tell me more" and you have already covered everything from the post, say "That's everything you wrote in that post" — NEVER invent extra details like "sharing with others" or "talking to friends" unless the post literally says that. DO NOT add steps or words that were NOT in the post. DO NOT hallucinate.
 
 ⸻
 
@@ -350,6 +342,13 @@ function userAskedAboutFeedOrPost(msg: string): boolean {
     'my posts',
     'check my post',
     'see my post',
+    'read my post',
+    'read my recent',
+    'recent post',
+    'last post',
+    'my recent post',
+    'tell me the last post',
+    'last post of mine',
     'what did i post',
     'what else i mentioned',
     'tell me everything i mentioned',
@@ -358,7 +357,14 @@ function userAskedAboutFeedOrPost(msg: string): boolean {
     'what did i write',
     'what i wrote',
     'my journal',
-    'my entries'
+    'my entries',
+    'can you read my',
+    'can you see my',
+    'what else',
+    'tell me more',
+    'anything else',
+    'more details',
+    'something else',
   ];
   
   return feedPostKeywords.some(keyword => lowerMsg.includes(keyword));
@@ -381,12 +387,19 @@ function isFeedQuestion(message: string): boolean {
     'my post',
     'my posts',
     'recent post',
+    'last post',
+    'read my post',
+    'read my recent',
+    'tell me the last',
+    'last post of mine',
     'what did i write',
     'how did i recover',
     'exactly',
     'tell me everything i mentioned',
     'can you see my post',
     'can you see my feed',
+    'can you read my',
+    'can you see my',
     'check my post',
     'see my post',
     'what did i post',
@@ -394,7 +407,11 @@ function isFeedQuestion(message: string): boolean {
     'my journal',
     'my entries',
     'exact post',
-    'exactly what i wrote'
+    'exactly what i wrote',
+    'what else',
+    'tell me more',
+    'anything else',
+    'more details'
   ];
   
   return feedQuestionPatterns.some(pattern => lowerMsg.includes(pattern));
@@ -2290,6 +2307,10 @@ export async function getAIPanicResponse(
       message.toLowerCase().includes('see whether') ||
       message.toLowerCase().includes('can you see') ||
       message.toLowerCase().includes('what did i') ||
+      message.toLowerCase().includes('what else') ||
+      message.toLowerCase().includes('tell me more') ||
+      message.toLowerCase().includes('anything else') ||
+      message.toLowerCase().includes('more details') ||
       /did i (post|write|mention|say)/i.test(message) ||
       /what did i (post|write|say)/i.test(message) ||
       /(see|check|look).*(post|journal|record|feed)/i.test(message)
@@ -2316,7 +2337,7 @@ export async function getAIPanicResponse(
         inputText += `\n`;
         
         // Add FACT MODE instruction (ONLY for feed/post questions)
-        inputText += `When answering about posts, respond like a friend who remembers. Summarize what they wrote naturally and accurately. Do NOT dump the full post text. Do NOT say "I'm here with you" in post replies. Answer ONLY from the post content - do NOT add steps or words that were NOT in the post.\n\n`;
+        inputText += `When answering about posts, respond like a friend who remembers. ALWAYS tell them what they wrote - summarize naturally and accurately from POSTS_EVIDENCE above. NEVER say you can't access it or ask them to remind you. Do NOT dump the full post text. Do NOT say "I'm here with you" in post replies. CRITICAL: Answer ONLY from the post content - NEVER add things they did not write (e.g. "sharing with others", "talking to friends" — only say these if the post literally says so). If they ask "what else?" and you have covered everything, say "That's everything you wrote" — do NOT invent more.\n\n`;
         
         console.log('[AI] [FEED] FACT MODE activated - injected full post content');
       }

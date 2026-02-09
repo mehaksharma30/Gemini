@@ -21,7 +21,9 @@ export function getAIProvider(): AIProvider {
 export function initializeAIProvider(): AIProvider {
   const provider = getAIProvider();
   const hasGeminiKey = !!process.env.GEMINI_API_KEY;
+  const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
   console.log(`AI Provider: ${provider}`);
+  console.log(`Using Gemini model: ${modelName}`);
   if (!hasGeminiKey) {
     console.warn('[AI Provider] GEMINI_API_KEY not set. AI features will fail.');
   }

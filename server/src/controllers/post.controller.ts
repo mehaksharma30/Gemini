@@ -141,12 +141,16 @@ export const createPost = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'Title and content are required' });
     }
 
+    const authorId = mongoose.Types.ObjectId.isValid(req.user.userId)
+      ? new mongoose.Types.ObjectId(req.user.userId)
+      : req.user.userId;
+
     const post = await Post.create({
       title: title.trim(),
       content: content.trim(),
       tags: normalizeTags(tags),
       isPublic: typeof isPublic === 'boolean' ? isPublic : true,
-      authorId: req.user.userId,
+      authorId,
       authorName: req.user.username,
     });
 

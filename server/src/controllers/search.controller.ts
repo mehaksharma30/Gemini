@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import Post from '../models/Post';
 import User from '../models/User';
 import { getSearchKeywordsFromOpenAI } from '../services/openaiChat.service';
@@ -74,11 +75,15 @@ export const searchUsersByTopic = async (req: Request, res: Response) => {
     });
 
     const authorIds = Array.from(postsByAuthor.keys());
-    const users = await User.find({
-      _id: { $in: authorIds },
-    })
-      .select('_id username xp level badge')
-      .lean();
+    const userIds = authorIds
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    const users = userIds.length > 0
+      ? await User.find({ _id: { $in: userIds } })
+          .select('_id username xp level badge')
+          .lean()
+      : [];
 
     const results: UserSearchResult[] = users.map(user => {
       const userPosts = postsByAuthor.get(user._id.toString()) || [];
