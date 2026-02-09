@@ -1,4 +1,5 @@
 # MindMemos (Gemini 3 Hackathon) — Web Platform
+##Mindmemos Watch Repo link - https://github.com/aman070902/mindmemos-watch
 
 MindMemos is a gesture- and voice-first mental health support platform built around real lived experiences. The **web platform** combines guided journaling, community recovery stories, peer chat, emergency contacts, and an AI support layer powered by **Gemini 3 Pro** (configurable via `GEMINI_MODEL`). The goal is simple: make support accessible in moments when typing, searching, or navigating a complex UI feels impossible.
 
